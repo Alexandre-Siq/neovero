@@ -42,12 +42,12 @@ eles rodam contra uma réplica da tela.
 1. Baixe [`dist/autoteste.html`](dist/autoteste.html) — no GitHub, abra o arquivo e use o botão
    *Download raw file*.
 2. Abra o arquivo baixado no Chrome/Edge (duplo clique).
-3. Ele executa 12 verificações sozinho: painel injetado, simulação preenchendo os campos,
+3. Ele executa 13 verificações sozinho: painel injetado, simulação preenchendo os campos,
    fechamento completo, campos opcionais, aborto quando o serviço do preset não existe, calibração
-   de seletor, modo lote, "Conferir tela", classificação pela descrição, intervalo de 1 minuto
-   entre as datas e funcionamento dentro de `iframe`.
+   de seletor, modo lote (inclusive com classificação por descrição), "Conferir tela",
+   classificação pela descrição, intervalo de 1 minuto entre as datas e `iframe`.
 
-**12/12 verde** = pode instalar. Se alguma falhar, clique em **Copiar relatório** e me mande o texto:
+**13/13 verde** = pode instalar. Se alguma falhar, clique em **Copiar relatório** e me mande o texto:
 ele diz exatamente qual passo falhou e por quê.
 
 ### 2. Demonstração manual
@@ -145,8 +145,17 @@ ocorrência pode ter sido lançada sem a OS ser fechada, e aí basta fechar à m
 
 ### Passo 4 — Só depois disso, lote
 
-O modo **Lote** vem desligado. Só faz sentido depois que o passo 3 estiver saindo redondo várias
-vezes seguidas, porque ele repete o mesmo preset em vários chamados.
+Com um preset de serviço automático, o lote trabalha em duas passadas:
+
+1. **Leitura** — abre cada OS marcada só para ler a descrição e classificar o serviço. Não abre o
+   modal de ocorrência e não escreve nada.
+2. **Revisão** — mostra uma linha por chamado com a descrição, o serviço sugerido, a confiança e um
+   combo com a lista completa para você corrigir. Deixar em "— não fechar esta OS —" tira o chamado
+   do lote.
+3. **Execução** — fecha cada OS com o serviço que você aprovou, sem reclassificar.
+
+Dá para desmarcar a revisão e deixar o lote usar a sugestão de cada chamado direto, mas só vale a
+pena depois que as regras estiverem afinadas.
 
 ## Classificação automática do serviço
 
@@ -187,6 +196,16 @@ regra aponta para um serviço que não está mais na lista.
 
 Para ver o que ele faria sem fechar nada: **Conferir tela** mostra a descrição lida, o serviço
 classificado, a confiança e as alternativas.
+
+O nome do serviço é comparado por palavras significativas, então uma regra apontando para
+`SUBSTITUIÇÃO DE TONNER/CILINDRO` casa com a entrada da lista mesmo que ela esteja escrita
+`SUBSTITUICAO DE TONNER E CILINDRO`.
+
+### Ele aprende com a sua correção
+
+Quando o script pergunta e você escolhe uma opção diferente da sugerida, ele oferece criar uma regra
+com uma palavra da descrição (você pode editar a palavra antes de confirmar). Da próxima vez, um
+chamado parecido é classificado sozinho.
 
 ## Datas da ocorrência
 
@@ -239,7 +258,7 @@ por navegador (e pode ser exportado para os colegas).
 
 ## O que eu preciso de você
 
-O código já está pronto e testado contra uma réplica da tela (91 testes automatizados,
+O código já está pronto e testado contra uma réplica da tela (102 testes automatizados,
 incluindo o fluxo completo de ponta a ponta, com e sem `iframe`). O endereço já está resolvido
 (`ishaoc.neovero.com`). O que falta é ajustar aos detalhes do HTML real. Em ordem de prioridade:
 
@@ -283,7 +302,7 @@ confirmação de que o fornecedor não proíbe isso em contrato.
 
 ```bash
 npm install       # só jsdom, usado nos testes
-npm test          # 91 testes: texto, datas, espera, config, build e fluxo completo em jsdom
+npm test          # 102 testes: texto, datas, espera, config, build e fluxo completo em jsdom
 npm run build     # gera dist/ (userscript, extensão, autoteste.html e demo-autonomo.html)
 ```
 

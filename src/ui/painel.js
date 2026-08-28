@@ -149,10 +149,32 @@
     });
   }
 
+  /* Grava uma regra nova a partir de uma correção do usuário. */
+  function criarRegra(chave, servico) {
+    const limpa = String(chave || '').trim();
+    if (!limpa || !servico) return false;
+    const cfg = NV.config.obter();
+    const regras = NV.config.regrasDeClassificacao().map(function (r) {
+      return { quando: (r.quando || []).slice(), servico: r.servico, peso: r.peso };
+    });
+    const existente = regras.filter(function (r) {
+      return NV.text.equals(r.servico, servico);
+    })[0];
+    if (existente) {
+      if (existente.quando.indexOf(limpa) < 0) existente.quando.push(limpa);
+    } else {
+      regras.push({ quando: [limpa], servico: servico });
+    }
+    NV.config.aplicar({ classificacao: Object.assign({}, cfg.classificacao, { regras: regras }) });
+    NV.log.info('Regra criada', { chave: limpa, servico: servico });
+    return true;
+  }
+
   /* Confiança intermediária: o usuário escolhe entre as alternativas ranqueadas. */
   function escolherServico(info) {
     return new Promise(function (resolve) {
       const alternativas = (info.sugestao.alternativas || []).slice(0, 6);
+      const palavra = NV.classificar.sugerirPalavraChave(info.descricao, NV.config.regrasDeClassificacao());
       const html =
         '<p style="margin:0 0 10px">Descrição do chamado:</p>' +
         '<p style="margin:0 0 12px"><code>' + esc(NV.text.truncate(info.descricao, 220)) + '</code></p>' +
@@ -170,7 +192,13 @@
             );
           })
           .join('') +
-        '</ul>';
+        '</ul>' +
+        (palavra
+          ? '<label class="check" style="margin-top:10px"><input type="checkbox" data-aprender checked>' +
+            '<span>Criar regra para a palavra <input type="text" data-palavra value="' + esc(palavra) +
+            '" style="width:150px;display:inline-block;margin:0 4px"> → o serviço escolhido' +
+            '<small>Assim o próximo chamado parecido é classificado sozinho.</small></span></label>'
+          : '');
 
       const sobre = abrirSobreposicao(
         'Qual serviço usar?',
@@ -181,6 +209,14 @@
       );
 
       const responder = function (valor) {
+        /* Só aprende quando o usuário corrigiu a sugestão. */
+        const aprender = sobre.querySelector('[data-aprender]');
+        if (valor && aprender && aprender.checked && valor !== info.sugestao.escolhido) {
+          const campo = sobre.querySelector('[data-palavra]');
+          if (criarRegra(campo ? campo.value : palavra, valor)) {
+            status('✓ Regra criada: “' + (campo ? campo.value : palavra) + '” → ' + valor, 'ok');
+          }
+        }
         sobre.remove();
         resolve(valor);
       };
@@ -371,17 +407,118 @@
 
   /* ---------------- lote ---------------- */
 
+  async function executarLote(numeros, servicosPorOs) {
+    sinalAtual = NV.fluxo.criarSinal();
+    definirOcupado(true);
+    try {
+      const resumo = await NV.lote.fechar({
+        numeros: numeros,
+        servicosPorOs: servicosPorOs || null,
+        aoProgresso: aoProgresso,
+        sinal: sinalAtual,
+        aoEscolherServico: escolherServico
+      });
+      status(
+        '✓ ' + resumo.sucesso + '/' + resumo.total + ' fechadas' +
+          (resumo.falhas.length ? ' · ' + resumo.falhas.length + ' falha(s), veja o log' : ''),
+        resumo.falhas.length ? 'erro' : 'ok'
+      );
+      return resumo;
+    } finally {
+      definirOcupado(false);
+      sinalAtual = null;
+    }
+  }
+
+  /* Segunda etapa do lote: revisar o serviço classificado de cada OS antes de fechar. */
+  function revisarClassificacaoDoLote(itens, opcoes) {
+    return new Promise(function (resolve) {
+      const semDescricao = itens.filter(function (i) {
+        return !i.descricao;
+      }).length;
+
+      const opcoesHtml = function (selecionado) {
+        return (opcoes || [])
+          .map(function (o) {
+            return '<option value="' + esc(o) + '"' + (o === selecionado ? ' selected' : '') + '>' + esc(o) + '</option>';
+          })
+          .join('');
+      };
+
+      const linhas = itens
+        .map(function (item) {
+          const confianca = item.sugestao && item.sugestao.confianca ? Math.round(item.sugestao.confianca * 100) + '%' : '—';
+          const cor = !item.descricao ? '#f87171' : item.origem === 'regra' ? '#34d399' : '#fbbf24';
+          return (
+            '<li style="display:block">' +
+            '<div style="display:flex;gap:8px;align-items:baseline">' +
+            '<b>OS ' + esc(item.numero) + '</b>' +
+            '<span class="nome" style="color:#8b95a3">' +
+            esc(item.descricao ? NV.text.truncate(item.descricao, 90) : 'descrição não lida' + (item.erro ? ' (' + item.erro + ')' : '')) +
+            '</span>' +
+            '<span class="badge" style="color:' + cor + '">' + esc(item.origem) + ' ' + confianca + '</span>' +
+            '</div>' +
+            '<select data-os="' + esc(item.numero) + '" style="margin-top:6px">' +
+            '<option value="">— não fechar esta OS —</option>' +
+            opcoesHtml(item.servico) +
+            '</select>' +
+            '</li>'
+          );
+        })
+        .join('');
+
+      const html =
+        '<div class="' + (semDescricao ? 'aviso' : 'aviso-inline') + '">' +
+        (semDescricao
+          ? '<b>' + semDescricao + ' OS sem descrição lida.</b> Confira o serviço nessas linhas antes de continuar.'
+          : 'Serviço sugerido pela descrição de cada chamado. Ajuste o que estiver errado — o combo tem a lista completa.') +
+        '</div>' +
+        '<ul class="lista" style="max-height:420px">' + linhas + '</ul>';
+
+      const sobre = abrirSobreposicao(
+        'Revisar classificação do lote',
+        html,
+        '<button class="acao secundaria" data-cancelar>Cancelar</button>' +
+          '<button class="acao" data-executar>Fechar as OS revisadas</button>'
+      );
+
+      sobre.addEventListener('click', function (ev) {
+        const alvo = ev.target;
+        if (alvo.dataset && alvo.dataset.executar !== undefined) {
+          const mapa = {};
+          const numeros = [];
+          sobre.querySelectorAll('select[data-os]').forEach(function (sel) {
+            if (!sel.value) return;
+            mapa[sel.dataset.os] = sel.value;
+            numeros.push(sel.dataset.os);
+          });
+          sobre.remove();
+          resolve({ numeros: numeros, servicosPorOs: mapa });
+        } else if ((alvo.dataset && alvo.dataset.cancelar !== undefined) || alvo === sobre) {
+          sobre.remove();
+          resolve(null);
+        }
+      });
+    });
+  }
+
   async function abrirLote() {
     const cfg = NV.config.obter();
+    const preset = NV.config.presetAtivo() || {};
     const itens = NV.lote.listar();
     if (!itens.length) {
       status('Nenhuma OS encontrada na lista do Monitor de Atendimento', 'erro');
       return;
     }
+    const automatico = !!preset.servicoAutomatico;
     const html =
-      '<div class="aviso">O modo lote abre cada OS, lança a ocorrência do preset e fecha. ' +
-      'Confirme antes que o preset é o correto para <b>todas</b> as OS marcadas.</div>' +
-      '<label class="campo">Preset aplicado a todas<span class="badge">' + esc((NV.config.presetAtivo() || {}).nome || '—') + '</span></label>' +
+      '<div class="aviso">O modo lote abre cada OS, lança a ocorrência e fecha. ' +
+      (automatico
+        ? 'Como o preset escolhe o serviço pela descrição, primeiro é feita uma passada de leitura ' +
+          'para você <b>revisar a classificação</b> de cada chamado.'
+        : 'Confirme antes que o preset é o correto para <b>todas</b> as OS marcadas.') +
+      '</div>' +
+      '<label class="campo">Preset aplicado<span class="badge">' + esc(preset.nome || '—') + '</span></label>' +
       '<ul class="lista">' +
       itens
         .map(function (i) {
@@ -390,12 +527,17 @@
         .join('') +
       '</ul>' +
       '<label class="check"><input type="checkbox" data-parar ' + (cfg.lote.pararNoPrimeiroErro ? 'checked' : '') +
-      '> Parar no primeiro erro</label>';
+      '> Parar no primeiro erro</label>' +
+      (automatico
+        ? '<label class="check"><input type="checkbox" data-revisar checked>' +
+          '<span>Revisar a classificação antes de fechar' +
+          '<small>Desmarcado, usa a sugestão de cada chamado sem perguntar.</small></span></label>'
+        : '');
 
     const sobre = abrirSobreposicao(
       'Fechar em lote',
       html,
-      '<button class="acao secundaria" data-fechar>Cancelar</button><button class="acao" data-executar>Fechar selecionadas</button>'
+      '<button class="acao secundaria" data-fechar>Cancelar</button><button class="acao" data-executar>Continuar</button>'
     );
 
     sobre.querySelector('[data-executar]').addEventListener('click', async function () {
@@ -403,22 +545,48 @@
         .call(sobre.querySelectorAll('ul.lista input[type="checkbox"]:checked'))
         .map((c) => c.value);
       if (!numeros.length) return;
+      const revisar = automatico && sobre.querySelector('[data-revisar]').checked;
       NV.config.aplicar({ lote: { pararNoPrimeiroErro: sobre.querySelector('[data-parar]').checked } });
-      const ok = await confirmar('Confirmar lote', 'Serão fechadas <b>' + numeros.length + '</b> OS com o preset atual. Continuar?', 'Executar');
-      if (!ok) return;
       sobre.remove();
+
+      if (!revisar) {
+        const ok = await confirmar(
+          'Confirmar lote',
+          'Serão fechadas <b>' + numeros.length + '</b> OS' +
+            (automatico ? ', com o serviço decidido pela descrição de cada chamado' : ' com o preset atual') + '. Continuar?',
+          'Executar'
+        );
+        if (!ok) return;
+        await executarLote(numeros, null);
+        return;
+      }
+
+      /* Passada de leitura: classifica cada OS sem escrever nada. */
       sinalAtual = NV.fluxo.criarSinal();
       definirOcupado(true);
+      let levantamento;
       try {
-        const resumo = await NV.lote.fechar({ numeros: numeros, aoProgresso: aoProgresso, sinal: sinalAtual });
-        status(
-          '✓ ' + resumo.sucesso + '/' + resumo.total + ' fechadas' + (resumo.falhas.length ? ' · ' + resumo.falhas.length + ' falha(s), veja o log' : ''),
-          resumo.falhas.length ? 'erro' : 'ok'
-        );
+        status('… lendo a descrição de ' + numeros.length + ' chamados', 'trabalhando');
+        levantamento = await NV.lote.classificar({ numeros: numeros, aoProgresso: aoProgresso, sinal: sinalAtual });
+      } catch (erro) {
+        status('✗ ' + String(erro.message || erro), 'erro');
+        return;
       } finally {
         definirOcupado(false);
         sinalAtual = null;
       }
+
+      if (!levantamento.itens.length) {
+        status('Nada para revisar', 'erro');
+        return;
+      }
+
+      const revisado = await revisarClassificacaoDoLote(levantamento.itens, levantamento.opcoes);
+      if (!revisado || !revisado.numeros.length) {
+        status('Lote cancelado');
+        return;
+      }
+      await executarLote(revisado.numeros, revisado.servicosPorOs);
     });
   }
 

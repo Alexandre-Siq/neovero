@@ -235,6 +235,61 @@
   };
 
   /*
+   * Mesmo serviço escrito de outro jeito: "TONNER/CILINDRO" e "TONNER E CILINDRO"
+   * têm as mesmas palavras significativas. Compara conjuntos de radicais, ignorando
+   * pontuação e palavras de ligação.
+   */
+  classificar.mesmoServico = function (a, b) {
+    const ra = classificar.raizes(a).slice().sort();
+    const rb = classificar.raizes(b).slice().sort();
+    if (!ra.length || !rb.length) return false;
+    if (ra.join(' ') === rb.join(' ')) return true;
+    /* Um nome mais específico que o outro só conta a partir de 3 palavras, senão
+       "RESET DE SENHA" casaria com qualquer "RESET DE SENHA <sistema>". */
+    const menor = ra.length <= rb.length ? ra : rb;
+    const maior = ra.length <= rb.length ? rb : ra;
+    return (
+      menor.length >= 3 &&
+      menor.every(function (r) {
+        return maior.indexOf(r) >= 0;
+      })
+    );
+  };
+
+  /* Resolve um nome de serviço (de regra ou preset) para a entrada real da lista. */
+  classificar.acharNaLista = function (lista, nome) {
+    const opcoes = lista || [];
+    if (!nome) return null;
+    for (let i = 0; i < opcoes.length; i += 1) {
+      if (text.equals(opcoes[i], nome)) return opcoes[i];
+    }
+    for (let i = 0; i < opcoes.length; i += 1) {
+      if (classificar.mesmoServico(opcoes[i], nome)) return opcoes[i];
+    }
+    return null;
+  };
+
+  /*
+   * Palavra da descrição que serve de gatilho para uma regra nova, quando o usuário
+   * corrige a sugestão. Evita palavras já usadas em regras existentes.
+   */
+  classificar.sugerirPalavraChave = function (descricao, regras) {
+    const usadas = [];
+    (regras || []).forEach(function (r) {
+      (r.quando || []).forEach(function (chave) {
+        usadas.push(text.normalize(chave));
+      });
+    });
+    const candidatas = classificar.palavrasRelevantes(descricao).filter(function (p) {
+      return p.length >= 5 && usadas.indexOf(p) < 0;
+    });
+    candidatas.sort(function (a, b) {
+      return b.length - a.length;
+    });
+    return candidatas[0] || null;
+  };
+
+  /*
    * Escolhe o serviço.
    * options: { regras, opcoes, minimo }
    * Retorno: { descricao, escolhido, confianca, origem, regra, alternativas, avisos }
@@ -292,9 +347,7 @@
     });
 
     if (melhorRegra) {
-      const naLista = lista.filter(function (o) {
-        return text.equals(o, melhorRegra.servico);
-      })[0];
+      const naLista = classificar.acharNaLista(lista, melhorRegra.servico);
       if (naLista) {
         resultado.escolhido = naLista;
         resultado.confianca = 0.95;
@@ -375,9 +428,7 @@
     const lista = opcoes && opcoes.length ? opcoes : classificar.SERVICOS_CONHECIDOS;
     return (regras || [])
       .filter(function (r) {
-        return !lista.some(function (o) {
-          return text.equals(o, r.servico);
-        });
+        return !classificar.acharNaLista(lista, r.servico);
       })
       .map(function (r) {
         const parecido = text.pickBest(lista, r.servico, { min: 0.7 });

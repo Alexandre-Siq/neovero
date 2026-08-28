@@ -112,13 +112,42 @@ test('só sugere serviço que existe na lista da tela', () => {
   assert.ok(listaCurta.includes(r.escolhido) || r.escolhido === null);
 });
 
-test('regra apontando para serviço inexistente avisa e usa o mais próximo', () => {
-  const r = classificar.sugerir('trocar o toner', ['SUBSTITUICAO DE TONNER / CILINDRO'], {
-    regras: [{ quando: ['toner'], servico: 'SUBSTITUIÇÃO DE TONNER/CILINDRO' }]
+/*
+ * O nome do serviço na lista varia em pontuação e palavras de ligação
+ * ("TONNER/CILINDRO" vs "TONNER E CILINDRO"): a regra tem de casar do mesmo jeito.
+ */
+test('reconhece o mesmo serviço escrito de outra forma', () => {
+  assert.equal(classificar.mesmoServico('SUBSTITUIÇÃO DE TONNER/CILINDRO', 'SUBSTITUICAO DE TONNER E CILINDRO'), true);
+  assert.equal(classificar.mesmoServico('SUBSTITUIÇÃO DE TONNER/CILINDRO', 'SUBSTITUICAO DE TONNER / CILINDRO'), true);
+  assert.equal(classificar.mesmoServico('RESET DE SENHA', 'RESET DE SENHA (SAU)'), false, 'nome mais específico é outro serviço');
+  assert.equal(classificar.mesmoServico('ERRO DE IMPRESSÃO', 'ERRO DE PROCESSO'), false);
+});
+
+test('"tonner" e "cilindro" caem na opção da lista, com a grafia da lista', () => {
+  const lista = ['SUBSTITUICAO DE TONNER E CILINDRO', 'ERRO DE IMPRESSÃO'];
+  ['impressora sem tonner', 'preciso trocar o cilindro da impressora', 'toner acabou'].forEach(function (descricao) {
+    const r = sugerir(descricao, lista);
+    assert.equal(r.escolhido, 'SUBSTITUICAO DE TONNER E CILINDRO', descricao);
+    assert.equal(r.origem, 'regra');
   });
-  assert.equal(r.escolhido, 'SUBSTITUICAO DE TONNER / CILINDRO');
+});
+
+test('regra apontando para serviço inexistente avisa e usa o mais próximo', () => {
+  const r = classificar.sugerir('erro ao imprimir', ['ERRO DE IMPRESSAO NA REDE'], {
+    regras: [{ quando: ['erro ao imprimir'], servico: 'ERRO DE IMPRESSÃO' }]
+  });
+  assert.equal(r.escolhido, 'ERRO DE IMPRESSAO NA REDE');
   assert.equal(r.origem, 'regra-aproximada');
   assert.match(r.avisos.join(' '), /não existe na lista atual/);
+});
+
+test('sugere palavra-chave para uma regra nova, ignorando as já usadas', () => {
+  const palavra = classificar.sugerirPalavraChave('projetor da sala de reuniao sem imagem', classificar.REGRAS_PADRAO);
+  assert.ok(palavra && palavra.length >= 5, 'deveria sugerir uma palavra: ' + palavra);
+  assert.ok(['projetor', 'reuniao', 'imagem'].includes(palavra), 'palavra inesperada: ' + palavra);
+
+  const jaUsada = classificar.sugerirPalavraChave('toner acabou', [{ quando: ['toner'], servico: 'X' }]);
+  assert.notEqual(jaUsada, 'toner');
 });
 
 test('palavra-chave mais longa vence a mais curta', () => {

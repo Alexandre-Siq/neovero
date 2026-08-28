@@ -42,7 +42,8 @@
           presetAtivo: 'ti-configuracao',
           tempos: { elemento: 2500, modal: 2500, salvar: 2500, fechar: 2500, intervalo: 40 },
           lote: { esperaEntreOs: 200 },
-          cacheServicos: { valores: [], atualizadoEm: null }
+          cacheServicos: { valores: [], atualizadoEm: null },
+          lote: { esperaEntreOs: 200, maximo: 25, pararNoPrimeiroErro: true }
         },
         extra || {}
       )
@@ -290,6 +291,46 @@
     igual(diferenca, 60000, 'diferença em milissegundos');
 
     return 'sempre 60s de diferença, mesmo com duração configurada em 0';
+  });
+
+  teste('Lote usa a classificação por descrição em cada OS', async function () {
+    configurarPadrao();
+    NV().config.definirPresetAtivo('ti-automatico');
+    const descricoes = {
+      202602691: 'impressora sem tonner',
+      202602690: 'computador nao esta ligando'
+    };
+    const app = window.AppFalso.montar({
+      listaOs: Object.keys(descricoes),
+      numero: '202602691',
+      descricao: descricoes['202602691']
+    });
+    document.querySelectorAll('.linha-os').forEach(function (linha) {
+      const numero = linha.querySelector('.numero').textContent;
+      linha.addEventListener('click', function () {
+        app.estado.descricao = descricoes[numero];
+        app.estado.render();
+      });
+    });
+
+    const levantamento = await NV().lote.classificar({ numeros: ['202602691', '202602690'] });
+    igual(levantamento.itens.length, 2, 'OS lidas');
+    igual(levantamento.itens[0].servico, 'SUBSTITUIÇÃO DE TONNER/CILINDRO', 'classificação da 1ª OS');
+    igual(levantamento.itens[1].servico, 'LIGAR EQUIPAMENTO', 'classificação da 2ª OS');
+    igual(app.estado.ocorrencias.length, 0, 'a leitura não pode salvar nada');
+
+    const resumo = await NV().lote.fechar({
+      numeros: ['202602691', '202602690'],
+      servicosPorOs: {
+        202602691: levantamento.itens[0].servico,
+        202602690: levantamento.itens[1].servico
+      }
+    });
+    igual(resumo.sucesso, 2, 'OS fechadas' + (resumo.falhas.length ? ': ' + JSON.stringify(resumo.falhas) : ''));
+    igual(app.estado.ocorrencias[0].servico, 'LIGAR EQUIPAMENTO', 'serviço aplicado na última OS');
+
+    configurarPadrao();
+    return 'cada OS fechada com o serviço vindo da sua própria descrição';
   });
 
   teste('Funciona com a OS dentro de um iframe (janelas MDI do ASP.NET)', async function () {
