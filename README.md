@@ -37,20 +37,21 @@ Fluxo manual (hoje)                     Com o Neovero+
 1. Instale a extensão [Tampermonkey](https://www.tampermonkey.net/) no Chrome/Edge/Firefox.
 2. Abra o arquivo [`dist/neovero-fechamento-rapido.user.js`](dist/neovero-fechamento-rapido.user.js),
    copie o conteúdo, e no Tampermonkey use *Criar novo script* → cole → *Salvar*.
-3. Se o Neovero da empresa **não** estiver em um endereço `*.neovero.com`, acrescente no topo
-   do script uma linha com o endereço real:
+3. Abra `https://ishaoc.neovero.com/UI/Base/Menu.aspx#/`. Um painel escuro "Neovero+" aparece no
+   canto inferior direito.
+
+O endereço de vocês (`ishaoc.neovero.com`) já está na lista de `@match`, então não precisa editar
+nada. Se algum dia mudar de domínio, acrescente uma linha no topo do script:
 
 ```js
-// @match        https://neovero.suaempresa.com.br/*
+// @match        https://novo-endereco/*
 ```
-
-4. Abra o Neovero. Um painel escuro "Neovero+" aparece no canto inferior direito.
 
 ### Opção B — extensão do Chrome (para distribuir para a equipe)
 
-1. Edite `config/hosts.json` com o endereço do seu Neovero e rode `npm run build`.
-2. Em `chrome://extensions`, ative *Modo do desenvolvedor* → *Carregar sem compactação* →
-   selecione a pasta `dist/extensao`.
+1. Em `chrome://extensions`, ative *Modo do desenvolvedor* → *Carregar sem compactação* →
+   selecione a pasta `dist/extensao` (já configurada para `ishaoc.neovero.com`).
+2. Para outro domínio, edite `config/hosts.json` e rode `npm run build`.
 
 > A extensão usa `world: "MAIN"` para conseguir ler/preencher os campos e (opcionalmente)
 > gravar as chamadas de rede do diagnóstico.
@@ -107,6 +108,10 @@ Todos os elementos são localizados por **texto visível** (`Ocorrência`, `Salv
 `Data Final do Serviço`, `Fechar OS`…), o que funciona sem eu conhecer o HTML do Neovero.
 O caso frágil é botão só de ícone, como o de "Fechar OS", em que o texto vem de um tooltip.
 
+A busca atravessa `iframe`s de mesma origem, porque `Menu.aspx` é uma aplicação ASP.NET com
+janelas MDI e esse tipo de tela costuma carregar cada janela dentro de um frame. Os atalhos de
+teclado e o modo "aprender" também são registrados dentro dos frames.
+
 Se algum passo falhar com "não encontrado":
 
 1. Abra **⚙ → Seletores**.
@@ -118,21 +123,20 @@ por navegador (e pode ser exportado para os colegas).
 
 ## O que eu preciso de você
 
-O código já está pronto e testado contra uma réplica da tela (41 testes automatizados,
-incluindo o fluxo completo de ponta a ponta). O que falta é ajustar aos detalhes do
-HTML real do Neovero. Em ordem de prioridade:
+O código já está pronto e testado contra uma réplica da tela (49 testes automatizados,
+incluindo o fluxo completo de ponta a ponta, com e sem `iframe`). O endereço já está resolvido
+(`ishaoc.neovero.com`). O que falta é ajustar aos detalhes do HTML real. Em ordem de prioridade:
 
 1. **Testar com "Simular" em um chamado real** e me mandar o conteúdo do botão **Log**.
    Isso já resolve a maior parte dos ajustes.
 2. **Arquivo de diagnóstico** (⚙ → Diagnóstico → *Iniciar gravação* → feche um chamado à mão
    → *Parar e baixar*). O JSON traz a estrutura do modal e as chamadas de rede, com e-mail,
    CPF, telefone e tokens mascarados. Com ele eu deixo os seletores exatos em vez de heurísticos.
-3. **O endereço do Neovero de vocês** (só o domínio), para o `@match` sair certo.
-4. **Confirmação de política de TI**: podem instalar Tampermonkey ou uma extensão sem loja?
+3. **Confirmação de política de TI**: podem instalar Tampermonkey ou uma extensão sem loja?
    Se não puderem, tem uma alternativa em [Fase 2](#fase-2--fechamento-pela-api).
-5. **As combinações que vocês mais usam** (ocorrência + serviço + causa), para eu já entregar
+4. **As combinações que vocês mais usam** (ocorrência + serviço + causa), para eu já entregar
    os presets prontos em vez de você cadastrar um por um.
-6. **Regra de negócio das datas**: a ocorrência deve ter 1 minuto (como hoje) ou refletir o
+5. **Regra de negócio das datas**: a ocorrência deve ter 1 minuto (como hoje) ou refletir o
    tempo real do atendimento? Se alguém audita esses números, é melhor decidir antes.
 
 Detalhes de como coletar cada coisa: [`docs/coleta-de-dados.md`](docs/coleta-de-dados.md).
@@ -163,7 +167,7 @@ confirmação de que o fornecedor não proíbe isso em contrato.
 
 ```bash
 npm install       # só jsdom, usado nos testes
-npm test          # 41 testes: texto, datas, espera, config, build e fluxo completo em jsdom
+npm test          # 49 testes: texto, datas, espera, config, build e fluxo completo em jsdom
 npm run build     # gera dist/ (userscript + extensão)
 ```
 

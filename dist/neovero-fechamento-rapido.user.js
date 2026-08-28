@@ -4,6 +4,7 @@
 // @version      0.1.0
 // @description  Lança a ocorrência e fecha a Ordem de Serviço do Neovero em um clique, com presets configuráveis.
 // @author       —
+// @match        *://ishaoc.neovero.com/*
 // @match        *://*.neovero.com/*
 // @match        *://neovero.com/*
 // @grant        GM_setValue
@@ -295,22 +296,45 @@
     '[contenteditable="true"]'
   ].join(',');
 
+  /*
+   * Painéis de opções dos componentes mais comuns. O Neovero roda sobre ASP.NET,
+   * então os kits Kendo/Telerik/DevExpress entram na lista junto com os de Angular.
+   */
   const PAINEIS_DROPDOWN = [
     '[role="listbox"]',
     '[role="menu"]',
     '.dropdown-menu',
     '.select2-results',
+    '.select2-dropdown',
+    '.chosen-drop',
     '.ng-dropdown-panel',
+    '.ui-select-choices',
     '.mat-select-panel',
     '.mat-mdc-select-panel',
+    '.mat-autocomplete-panel',
+    'md-select-menu',
+    '.md-select-menu-container',
     '.p-dropdown-panel',
+    '.p-multiselect-panel',
     '.p-select-overlay',
     '.v-overlay',
     '.k-animation-container',
+    '.k-list-container',
+    '.k-popup',
+    '.RadComboBoxDropDown',
+    '.rcbSlide',
+    '.dx-dropdowneditor-overlay',
+    '.dx-overlay-wrapper',
+    '.dxeDropDownWindow',
+    '.dxpc-content',
     '.MuiPopover-root',
     '.tt-menu'
   ].join(',');
 
+  /* Separa o caminho do iframe do caminho do elemento dentro dele. */
+  const SEPARADOR_FRAME = ' >>> ';
+
+  dom.SEPARADOR_FRAME = SEPARADOR_FRAME;
   dom.CLICAVEIS = CLICAVEIS;
   dom.CONTROLES = CONTROLES;
   dom.PAINEIS_DROPDOWN = PAINEIS_DROPDOWN;
@@ -330,20 +354,54 @@
     return el.getAttribute('aria-disabled') !== 'true' && !/\bdisabled\b/.test(el.className || '');
   };
 
-  /* Todos os elementos de um escopo, atravessando shadow roots. */
+  /*
+   * O app monta as janelas em iframes de mesma origem (padrão MDI do ASP.NET),
+   * então a busca precisa entrar neles. Frames de outra origem são inacessíveis
+   * e simplesmente ignorados.
+   */
+  dom.documentoDoFrame = function (iframe) {
+    try {
+      const doc = iframe.contentDocument;
+      return doc && doc.body ? doc : null;
+    } catch (erro) {
+      return null;
+    }
+  };
+
+  dom.documentos = function () {
+    const docs = [document];
+    const visitar = function (doc, nivel) {
+      if (nivel > 3) return;
+      const frames = doc.querySelectorAll('iframe, frame');
+      for (let i = 0; i < frames.length; i += 1) {
+        const interno = dom.documentoDoFrame(frames[i]);
+        if (interno && docs.indexOf(interno) < 0) {
+          docs.push(interno);
+          visitar(interno, nivel + 1);
+        }
+      }
+    };
+    visitar(document, 1);
+    return docs;
+  };
+
+  /* Todos os elementos de um escopo, atravessando shadow roots e iframes. */
   dom.elementos = function (raiz) {
-    const base = raiz || document;
     const encontrados = [];
-    const visitar = function (no) {
+    const visitar = function (no, nivel) {
       const lista = no.querySelectorAll('*');
       for (let i = 0; i < lista.length; i += 1) {
         const el = lista[i];
         if (el.closest && el.closest('[data-nv-ui]')) continue;
         encontrados.push(el);
-        if (el.shadowRoot) visitar(el.shadowRoot);
+        if (el.shadowRoot) visitar(el.shadowRoot, nivel);
+        if (nivel < 3 && (el.tagName === 'IFRAME' || el.tagName === 'FRAME')) {
+          const interno = dom.documentoDoFrame(el);
+          if (interno) visitar(interno, nivel + 1);
+        }
       }
     };
-    visitar(base);
+    visitar(raiz || document, 1);
     return encontrados;
   };
 
@@ -387,6 +445,24 @@
   dom.area = function (el) {
     const r = el.getBoundingClientRect();
     return r.width * r.height;
+  };
+
+  /* Coordenadas na janela do topo, somando o deslocamento dos iframes. */
+  dom.retanguloAbsoluto = function (el) {
+    const r = el.getBoundingClientRect();
+    let x = r.left;
+    let y = r.top;
+    let doc = el.ownerDocument;
+    for (let n = 0; n < 3 && doc && doc !== document; n += 1) {
+      const janela = doc.defaultView;
+      const iframe = janela && janela.frameElement;
+      if (!iframe) break;
+      const rf = iframe.getBoundingClientRect();
+      x += rf.left;
+      y += rf.top;
+      doc = iframe.ownerDocument;
+    }
+    return { left: x, top: y, width: r.width, height: r.height };
   };
 
   /*
@@ -516,13 +592,24 @@
     return null;
   };
 
-  /* Frameworks reativos só reconhecem o valor quando ele passa pelo setter nativo. */
+  /*
+   * Setter nativo do value: frameworks reativos ignoram atribuição direta.
+   * Resolvido por tagName e pela janela do próprio elemento, porque um elemento
+   * dentro de iframe pertence a outro realm (instanceof do topo não funciona).
+   */
+  dom.setterDeValor = function (el) {
+    const janela = el.ownerDocument.defaultView || window;
+    const construtor = el.tagName === 'TEXTAREA' ? janela.HTMLTextAreaElement
+      : el.tagName === 'SELECT' ? janela.HTMLSelectElement
+        : janela.HTMLInputElement;
+    if (!construtor) return null;
+    const descritor = Object.getOwnPropertyDescriptor(construtor.prototype, 'value');
+    return descritor && descritor.set ? descritor.set : null;
+  };
+
   dom.definirValor = function (el, valor) {
-    const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype
-      : el instanceof HTMLSelectElement ? HTMLSelectElement.prototype
-        : HTMLInputElement.prototype;
-    const setter = Object.getOwnPropertyDescriptor(proto, 'value');
-    if (setter && setter.set) setter.set.call(el, valor);
+    const setter = dom.setterDeValor(el);
+    if (setter) setter.call(el, valor);
     else el.value = valor;
     dom.disparar(el, 'input');
     dom.disparar(el, 'change');
@@ -553,10 +640,9 @@
       const ch = valor[i];
       dom.disparar(el, 'keydown', { key: ch });
       dom.disparar(el, 'keypress', { key: ch });
-      const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
-      const setter = Object.getOwnPropertyDescriptor(proto, 'value');
+      const setter = dom.setterDeValor(el);
       const atual = el.value + ch;
-      if (setter && setter.set) setter.set.call(el, atual);
+      if (setter) setter.call(el, atual);
       else el.value = atual;
       dom.disparar(el, 'input');
       dom.disparar(el, 'keyup', { key: ch });
@@ -616,6 +702,36 @@
     });
   };
 
+  /*
+   * Eventos de dentro de um iframe não sobem para o documento do topo, então
+   * atalhos e captura de clique precisam ser registrados em cada documento.
+   * Frames aparecem depois da carga, por isso o re-registro periódico.
+   */
+  dom.ouvirTodos = function (tipo, handler, opcoes) {
+    const registrados = new WeakSet();
+    const registrar = function () {
+      dom.documentos().forEach(function (doc) {
+        if (registrados.has(doc)) return;
+        registrados.add(doc);
+        doc.addEventListener(tipo, handler, opcoes);
+      });
+    };
+    registrar();
+    const temporizador = setInterval(registrar, 4000);
+    /* Em ambiente Node (testes) o timer não deve impedir o processo de encerrar. */
+    if (temporizador && typeof temporizador.unref === 'function') temporizador.unref();
+    return function desligar() {
+      clearInterval(temporizador);
+      dom.documentos().forEach(function (doc) {
+        try {
+          doc.removeEventListener(tipo, handler, opcoes);
+        } catch (erro) {
+          /* documento já descartado */
+        }
+      });
+    };
+  };
+
   dom.descrever = function (el) {
     if (!el) return 'null';
     const partes = [el.tagName.toLowerCase()];
@@ -630,11 +746,43 @@
   /* Caminho CSS estável o suficiente para reuso entre sessões. */
   dom.caminhoCss = function (el) {
     if (!el || el.nodeType !== 1) return null;
+    const prefixo = dom.caminhoDoFrame(el.ownerDocument);
+    const local = dom.caminhoCssNoDocumento(el);
+    return prefixo ? prefixo + SEPARADOR_FRAME + local : local;
+  };
+
+  /*
+   * Elemento dentro de iframe: guarda "caminho do iframe >>> caminho do elemento",
+   * para o seletor calibrado continuar resolvendo na próxima sessão.
+   */
+  dom.caminhoDoFrame = function (doc) {
+    if (!doc || doc === document) return null;
+    const partes = [];
+    let atual = doc;
+    for (let n = 0; n < 3 && atual && atual !== document; n += 1) {
+      const janela = atual.defaultView;
+      const iframe = janela && janela.frameElement;
+      if (!iframe) return null;
+      partes.unshift(dom.caminhoCssNoDocumento(iframe));
+      atual = iframe.ownerDocument;
+    }
+    return partes.length ? partes.join(SEPARADOR_FRAME) : null;
+  };
+
+  /* CSS.escape não existe em navegadores antigos nem em todos os ambientes de teste. */
+  function escapar(valor) {
+    const texto = String(valor);
+    if (typeof CSS !== 'undefined' && CSS && typeof CSS.escape === 'function') return CSS.escape(texto);
+    return texto.replace(/([^\w-])/g, '\\$1');
+  }
+
+  dom.caminhoCssNoDocumento = function (el) {
+    if (!el || el.nodeType !== 1) return null;
     const partes = [];
     let atual = el;
     while (atual && atual.nodeType === 1 && partes.length < 8) {
       if (atual.id && !/\d{4,}/.test(atual.id)) {
-        partes.unshift('#' + CSS.escape(atual.id));
+        partes.unshift('#' + escapar(atual.id));
         break;
       }
       const estaveis = ['data-testid', 'data-test', 'data-id', 'name', 'aria-label'];
@@ -643,7 +791,7 @@
       for (let i = 0; i < estaveis.length; i += 1) {
         const valor = atual.getAttribute(estaveis[i]);
         if (valor && valor.length < 60) {
-          seletor += '[' + estaveis[i] + '="' + CSS.escape(valor) + '"]';
+          seletor += '[' + estaveis[i] + '="' + escapar(valor) + '"]';
           usouAttr = true;
           break;
         }
@@ -656,7 +804,7 @@
             return c && !/\d{3,}/.test(c) && c.length < 40;
           })
           .slice(0, 2);
-        if (classes.length) seletor += '.' + classes.map(function (c) { return CSS.escape(c); }).join('.');
+        if (classes.length) seletor += '.' + classes.map(function (c) { return escapar(c); }).join('.');
         const pai = atual.parentElement;
         if (pai) {
           const irmaos = Array.prototype.filter.call(pai.children, function (c) {
@@ -674,7 +822,15 @@
   dom.porCaminhoCss = function (caminho, raiz) {
     if (!caminho) return null;
     try {
-      const el = (raiz || document).querySelector(caminho);
+      const trechos = String(caminho).split(SEPARADOR_FRAME);
+      let escopo = raiz || document;
+      for (let i = 0; i < trechos.length - 1; i += 1) {
+        const iframe = escopo.querySelector(trechos[i].trim());
+        const interno = iframe ? dom.documentoDoFrame(iframe) : null;
+        if (!interno) return null;
+        escopo = interno;
+      }
+      const el = escopo.querySelector(trechos[trechos.length - 1].trim());
       return el && dom.visivel(el) ? el : null;
     } catch (erro) {
       return null;
@@ -2287,6 +2443,24 @@
 
   let ativo = null;
 
+  /* Entra nos iframes de mesma origem: as janelas da OS podem estar dentro deles. */
+  function elementoNoPonto(x, y) {
+    let el = document.elementFromPoint(x, y);
+    let deslocX = 0;
+    let deslocY = 0;
+    for (let n = 0; n < 3 && el && (el.tagName === 'IFRAME' || el.tagName === 'FRAME'); n += 1) {
+      const interno = dom.documentoDoFrame(el);
+      if (!interno) break;
+      const r = el.getBoundingClientRect();
+      deslocX += r.left;
+      deslocY += r.top;
+      const dentro = interno.elementFromPoint(x - deslocX, y - deslocY);
+      if (!dentro) break;
+      el = dentro;
+    }
+    return el;
+  }
+
   function criarCamada() {
     const camada = document.createElement('div');
     camada.setAttribute('data-nv-ui', 'aprender');
@@ -2349,9 +2523,9 @@
       ui.dica.textContent = 'Clique em: ' + (rotuloAmigavel || chave) + '  ·  Esc para cancelar';
 
       const aoMover = function (ev) {
-        const el = document.elementFromPoint(ev.clientX, ev.clientY);
+        const el = elementoNoPonto(ev.clientX, ev.clientY);
         if (!el || el.closest('[data-nv-ui]')) return;
-        const r = el.getBoundingClientRect();
+        const r = dom.retanguloAbsoluto(el);
         ui.realce.style.left = r.left + 'px';
         ui.realce.style.top = r.top + 'px';
         ui.realce.style.width = r.width + 'px';
@@ -2365,7 +2539,7 @@
       };
 
       const aoClicar = function (ev) {
-        const el = document.elementFromPoint(ev.clientX, ev.clientY);
+        const el = elementoNoPonto(ev.clientX, ev.clientY);
         if (!el || el.closest('[data-nv-ui]')) return;
         ev.preventDefault();
         ev.stopPropagation();
@@ -2385,16 +2559,17 @@
         }
       };
 
+      const desligarMover = dom.ouvirTodos('mousemove', aoMover, true);
+      const desligarClique = dom.ouvirTodos('click', aoClicar, true);
+      const desligarTecla = dom.ouvirTodos('keydown', aoTeclar, true);
+
       const limpar = function () {
-        document.removeEventListener('mousemove', aoMover, true);
-        document.removeEventListener('click', aoClicar, true);
-        document.removeEventListener('keydown', aoTeclar, true);
+        desligarMover();
+        desligarClique();
+        desligarTecla();
         ui.camada.remove();
       };
 
-      document.addEventListener('mousemove', aoMover, true);
-      document.addEventListener('click', aoClicar, true);
-      document.addEventListener('keydown', aoTeclar, true);
       ativo = { limpar: limpar };
     });
   };
@@ -3096,7 +3271,7 @@
 
   function registrarAtalhos() {
     if (globaisRegistrados) return;
-    window.addEventListener(
+    NV.dom.ouvirTodos(
       'keydown',
       function (ev) {
         /* O próprio script dispara Escape para fechar calendários; só tecla real conta. */
@@ -3224,12 +3399,21 @@
 
   NV.VERSAO = '0.1.0';
 
+  function textoDaTela() {
+    return NV.dom
+      .documentos()
+      .map(function (doc) {
+        return (doc.body && (doc.body.innerText || doc.body.textContent)) || '';
+      })
+      .join(' ');
+  }
+
   function pareceNeovero() {
     const cfg = NV.config.obter();
     if (cfg.hostsLiberados.indexOf(location.host) >= 0) return true;
     if (/neovero/i.test(location.hostname)) return true;
     if (/neovero/i.test(document.title)) return true;
-    const corpo = (document.body && document.body.innerText) || '';
+    const corpo = textoDaTela();
     if (/neovero/i.test(corpo)) return true;
     return /monitor de atendimento/i.test(corpo) && /ordem de servi/i.test(corpo);
   }

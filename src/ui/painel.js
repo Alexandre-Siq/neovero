@@ -691,7 +691,7 @@
 
   function registrarAtalhos() {
     if (globaisRegistrados) return;
-    window.addEventListener(
+    NV.dom.ouvirTodos(
       'keydown',
       function (ev) {
         /* O próprio script dispara Escape para fechar calendários; só tecla real conta. */

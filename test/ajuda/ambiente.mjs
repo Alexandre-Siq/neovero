@@ -11,24 +11,30 @@ const OPCOES_SERVICO = ['CONFIGURAÇÃO DE EQUIPAMENTOS', 'CONFIGURAÇÃO DE RED
 
 let jsdomInstancia = null;
 
-export function prepararGlobais() {
-  if (jsdomInstancia) return jsdomInstancia;
-
-  jsdomInstancia = new JSDOM('<!doctype html><html><head><title>Neovero</title></head><body></body></html>', {
-    url: 'https://cliente.neovero.com/os',
-    pretendToBeVisual: true
-  });
-
-  const { window } = jsdomInstancia;
-
-  /* jsdom não faz layout: todo elemento conectado é considerado visível. */
-  window.Element.prototype.getBoundingClientRect = function () {
-    const estilo = window.getComputedStyle(this);
+/* jsdom não faz layout: todo elemento conectado é considerado visível. */
+function simularLayout(janela) {
+  janela.Element.prototype.getBoundingClientRect = function () {
+    const estilo = janela.getComputedStyle(this);
     const oculto = estilo.display === 'none' || estilo.visibility === 'hidden';
     const largura = oculto ? 0 : 120;
     const altura = oculto ? 0 : 24;
     return { width: largura, height: altura, left: 0, top: 0, right: largura, bottom: altura, x: 0, y: 0 };
   };
+}
+
+export function prepararGlobais() {
+  if (jsdomInstancia) return jsdomInstancia;
+
+  jsdomInstancia = new JSDOM(
+    '<!doctype html><html><head><title>Neovero</title></head><body></body></html>',
+    {
+      url: 'https://ishaoc.neovero.com/UI/Base/Menu.aspx',
+      pretendToBeVisual: true
+    }
+  );
+
+  const { window } = jsdomInstancia;
+  simularLayout(window);
 
   const globais = [
     'window',
@@ -189,12 +195,28 @@ function abrirModal(doc, estado) {
 }
 
 /*
+ * Cria um iframe de mesma origem e devolve o documento interno, para simular a
+ * janela MDI do ASP.NET (Menu.aspx que carrega a tela da OS dentro de um frame).
+ */
+export function montarAppEmFrame(opcoes) {
+  const doc = jsdomInstancia.window.document;
+  doc.body.innerHTML = '';
+  const iframe = doc.createElement('iframe');
+  iframe.setAttribute('name', 'janelaOs');
+  doc.body.appendChild(iframe);
+  simularLayout(iframe.contentWindow);
+  const app = montarApp(Object.assign({}, opcoes || {}, { documento: iframe.contentDocument }));
+  app.iframe = iframe;
+  return app;
+}
+
+/*
  * Monta a janela da OS. Opções:
- *   numero, abertura, comAtendimentoIniciado, opcoesServico, semTooltipFecharOs
+ *   numero, abertura, comAtendimentoIniciado, opcoesServico, semTooltipFecharOs, documento
  */
 export function montarApp(opcoes) {
   const opts = opcoes || {};
-  const doc = jsdomInstancia.window.document;
+  const doc = opts.documento || jsdomInstancia.window.document;
   doc.body.innerHTML = '';
 
   const numero = opts.numero || '202602691';
@@ -320,8 +342,21 @@ export function montarApp(opcoes) {
   return { doc, janela, estado, numero };
 }
 
+function documentos() {
+  const doc = jsdomInstancia.window.document;
+  const lista = [doc];
+  doc.querySelectorAll('iframe').forEach(function (iframe) {
+    if (iframe.contentDocument) lista.push(iframe.contentDocument);
+  });
+  return lista;
+}
+
 export function modalAberto() {
-  return jsdomInstancia.window.document.querySelector('.modal-ocorrencia');
+  for (const doc of documentos()) {
+    const modal = doc.querySelector('.modal-ocorrencia');
+    if (modal) return modal;
+  }
+  return null;
 }
 
 export function valorDoCampo(chave) {

@@ -4,12 +4,21 @@
 
   NV.VERSAO = '__VERSAO__';
 
+  function textoDaTela() {
+    return NV.dom
+      .documentos()
+      .map(function (doc) {
+        return (doc.body && (doc.body.innerText || doc.body.textContent)) || '';
+      })
+      .join(' ');
+  }
+
   function pareceNeovero() {
     const cfg = NV.config.obter();
     if (cfg.hostsLiberados.indexOf(location.host) >= 0) return true;
     if (/neovero/i.test(location.hostname)) return true;
     if (/neovero/i.test(document.title)) return true;
-    const corpo = (document.body && document.body.innerText) || '';
+    const corpo = textoDaTela();
     if (/neovero/i.test(corpo)) return true;
     return /monitor de atendimento/i.test(corpo) && /ordem de servi/i.test(corpo);
   }

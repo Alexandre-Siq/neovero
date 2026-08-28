@@ -11,6 +11,24 @@
 
   let ativo = null;
 
+  /* Entra nos iframes de mesma origem: as janelas da OS podem estar dentro deles. */
+  function elementoNoPonto(x, y) {
+    let el = document.elementFromPoint(x, y);
+    let deslocX = 0;
+    let deslocY = 0;
+    for (let n = 0; n < 3 && el && (el.tagName === 'IFRAME' || el.tagName === 'FRAME'); n += 1) {
+      const interno = dom.documentoDoFrame(el);
+      if (!interno) break;
+      const r = el.getBoundingClientRect();
+      deslocX += r.left;
+      deslocY += r.top;
+      const dentro = interno.elementFromPoint(x - deslocX, y - deslocY);
+      if (!dentro) break;
+      el = dentro;
+    }
+    return el;
+  }
+
   function criarCamada() {
     const camada = document.createElement('div');
     camada.setAttribute('data-nv-ui', 'aprender');
@@ -73,9 +91,9 @@
       ui.dica.textContent = 'Clique em: ' + (rotuloAmigavel || chave) + '  ·  Esc para cancelar';
 
       const aoMover = function (ev) {
-        const el = document.elementFromPoint(ev.clientX, ev.clientY);
+        const el = elementoNoPonto(ev.clientX, ev.clientY);
         if (!el || el.closest('[data-nv-ui]')) return;
-        const r = el.getBoundingClientRect();
+        const r = dom.retanguloAbsoluto(el);
         ui.realce.style.left = r.left + 'px';
         ui.realce.style.top = r.top + 'px';
         ui.realce.style.width = r.width + 'px';
@@ -89,7 +107,7 @@
       };
 
       const aoClicar = function (ev) {
-        const el = document.elementFromPoint(ev.clientX, ev.clientY);
+        const el = elementoNoPonto(ev.clientX, ev.clientY);
         if (!el || el.closest('[data-nv-ui]')) return;
         ev.preventDefault();
         ev.stopPropagation();
@@ -109,16 +127,17 @@
         }
       };
 
+      const desligarMover = dom.ouvirTodos('mousemove', aoMover, true);
+      const desligarClique = dom.ouvirTodos('click', aoClicar, true);
+      const desligarTecla = dom.ouvirTodos('keydown', aoTeclar, true);
+
       const limpar = function () {
-        document.removeEventListener('mousemove', aoMover, true);
-        document.removeEventListener('click', aoClicar, true);
-        document.removeEventListener('keydown', aoTeclar, true);
+        desligarMover();
+        desligarClique();
+        desligarTecla();
         ui.camada.remove();
       };
 
-      document.addEventListener('mousemove', aoMover, true);
-      document.addEventListener('click', aoClicar, true);
-      document.addEventListener('keydown', aoTeclar, true);
       ativo = { limpar: limpar };
     });
   };
