@@ -29,7 +29,13 @@ test('painel montado não cancela o fluxo com o Esc que o próprio script dispar
 
 test('remonta o painel se a aplicação limpar a página', () => {
   montarApp();
-  assert.equal(NV.painel.montado(), false, 'o app falso substituiu o body e levou o painel');
+  NV.painel.montar();
+  assert.equal(NV.painel.montado(), true);
+
+  /* SPA trocando o conteúdo da página leva o painel embora. */
+  document.querySelector('[data-nv-ui="painel"]').remove();
+  assert.equal(NV.painel.montado(), false);
+
   NV.painel.montar();
   assert.equal(NV.painel.montado(), true);
 });

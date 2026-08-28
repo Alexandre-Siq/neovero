@@ -50,7 +50,7 @@ test('não tenta iniciar atendimento quando o botão não está na tela', async 
   const app = montarApp({ comAtendimentoIniciado: true });
   const resultado = await NV.fluxo.fecharOS({});
   assert.equal(resultado.ok, true);
-  assert.equal(app.estado.atendimentoIniciado, undefined);
+  assert.equal(app.estado.atendimentoIniciado, false, 'não deveria ter clicado em "Iniciar Atendimento"');
 });
 
 test('simulação preenche o modal e para antes de salvar', async () => {
