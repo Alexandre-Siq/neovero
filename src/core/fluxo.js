@@ -283,7 +283,11 @@
       const el = combos[i][2];
       if (!el) continue;
       try {
-        relatorio.opcoes[chave] = await campos.listarOpcoes(el, { rotulo: combos[i][1] });
+        const saida = await campos.listarOpcoes(el, { rotulo: combos[i][1], comEstado: true });
+        relatorio.opcoes[chave] = saida.opcoes;
+        if (!saida.painelFechado) {
+          relatorio.problemas.push('A lista de "' + combos[i][1] + '" ficou aberta na tela — feche clicando fora.');
+        }
       } catch (erro) {
         relatorio.opcoes[chave] = null;
         relatorio.problemas.push('Não consegui abrir a lista de "' + combos[i][1] + '": ' + String(erro.message || erro));

@@ -136,6 +136,11 @@
     });
   }
 
+  /*
+   * Combo customizado: alterna no clique e fecha ao clicar fora, como os widgets reais.
+   * De propósito NÃO fecha com Esc — assim o script é obrigado a exercitar as outras
+   * formas de fechar, que é o pior caso que pode aparecer na produção.
+   */
   function combo(doc, nome, opcoes) {
     const gatilho = h(doc, 'div', {
       role: 'combobox',
@@ -144,14 +149,33 @@
       classe: 'combo',
       texto: 'Selecione ...'
     });
+
+    let lista = null;
+
+    function fechar() {
+      if (!lista) return;
+      lista.remove();
+      lista = null;
+      doc.removeEventListener('mousedown', aoClicarFora, true);
+    }
+
+    function aoClicarFora(ev) {
+      if (!lista) return;
+      if (gatilho === ev.target || gatilho.contains(ev.target) || lista.contains(ev.target)) return;
+      fechar();
+    }
+
     gatilho.addEventListener('click', function () {
-      if (doc.querySelector('ul[data-lista="' + nome + '"]')) return;
-      const lista = h(doc, 'ul', { role: 'listbox', 'data-lista': nome, classe: 'painel-opcoes' });
+      if (lista) {
+        fechar();
+        return;
+      }
+      lista = h(doc, 'ul', { role: 'listbox', 'data-lista': nome, classe: 'painel-opcoes' });
       opcoes.forEach(function (opcao) {
         const item = h(doc, 'li', { role: 'option', texto: opcao });
         item.addEventListener('click', function () {
           gatilho.textContent = opcao;
-          lista.remove();
+          fechar();
         });
         lista.appendChild(item);
       });
@@ -160,7 +184,9 @@
       lista.style.left = r.left + 'px';
       lista.style.top = r.bottom + 4 + 'px';
       lista.style.minWidth = r.width + 'px';
+      doc.addEventListener('mousedown', aoClicarFora, true);
     });
+
     return gatilho;
   }
 

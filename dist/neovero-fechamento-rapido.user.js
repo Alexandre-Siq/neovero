@@ -1531,25 +1531,63 @@
     };
   };
 
+  /*
+   * Fecha a lista de opções sem selecionar nada, tentando o que um usuário faria:
+   * Esc, clicar de novo no combo (alterna) e, por último, clicar fora.
+   * Não removemos o elemento na mão para não deixar o widget em estado inconsistente.
+   */
+  campos.garantirPainelFechado = async function (el, painel) {
+    const aberto = function () {
+      return painel && painel.isConnected && dom.visivel(painel);
+    };
+
+    campos.fecharPainel(el);
+    await async.sleep(120);
+    if (!aberto()) return true;
+
+    try {
+      dom.clicar(dom.alvoClicavel(el, 2) || el);
+    } catch (erro) {
+      /* segue para o clique fora */
+    }
+    await async.sleep(150);
+    if (!aberto()) return true;
+
+    const doc = el.ownerDocument;
+    dom.disparar(doc.body, 'mousedown');
+    dom.disparar(doc.body, 'click');
+    await async.sleep(150);
+    if (!aberto()) return true;
+
+    NV.log.aviso('A lista de opções continuou aberta na tela', { painel: dom.descrever(painel) });
+    return false;
+  };
+
   /* Lista as opções disponíveis sem selecionar nada (usado no "Conferir tela"). */
   campos.listarOpcoes = async function (el, options) {
     const opts = options || {};
-    if (!el) return null;
+    const responder = function (opcoes, painelFechado) {
+      return opts.comEstado ? { opcoes: opcoes, painelFechado: painelFechado } : opcoes;
+    };
+
+    if (!el) return responder(null, true);
+
     if (el.tagName === 'SELECT') {
-      return Array.prototype.slice
+      const nativas = Array.prototype.slice
         .call(el.options)
         .map(function (o) {
           return o.textContent.trim();
         })
         .filter(Boolean);
+      return responder(nativas, true);
     }
+
     const aberto = await campos.abrirPainel(el, { rotulo: opts.rotulo });
     const opcoes = opcoesDe(aberto.painel).map(function (o) {
       return o.texto;
     });
-    campos.fecharPainel(el);
-    await async.sleep(150);
-    return opcoes;
+    const fechou = await campos.garantirPainelFechado(el, aberto.painel);
+    return responder(opcoes, fechou);
   };
 
   /*
@@ -1596,7 +1634,7 @@
 
     if (!melhor) {
       const disponiveis = opcoesDe(painel).map((o) => o.texto).slice(0, 40);
-      campos.fecharPainel(el);
+      await campos.garantirPainelFechado(el, painel);
       throw new async.PassoError('Opção não encontrada em ' + rotulo + ': “' + valor + '”', {
         rotulo: rotulo,
         disponiveis: disponiveis
@@ -1979,7 +2017,11 @@
       const el = combos[i][2];
       if (!el) continue;
       try {
-        relatorio.opcoes[chave] = await campos.listarOpcoes(el, { rotulo: combos[i][1] });
+        const saida = await campos.listarOpcoes(el, { rotulo: combos[i][1], comEstado: true });
+        relatorio.opcoes[chave] = saida.opcoes;
+        if (!saida.painelFechado) {
+          relatorio.problemas.push('A lista de "' + combos[i][1] + '" ficou aberta na tela — feche clicando fora.');
+        }
       } catch (erro) {
         relatorio.opcoes[chave] = null;
         relatorio.problemas.push('Não consegui abrir a lista de "' + combos[i][1] + '": ' + String(erro.message || erro));

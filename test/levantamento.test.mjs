@@ -52,6 +52,29 @@ test('lista as opções reais de cada combo', async () => {
   assert.ok(rel.opcoes.causa.includes('FALHA DE HARDWARE'), 'combo nativo também deve ser lido');
 });
 
+/* Regressão: as listas flutuantes ficavam abertas na tela depois de serem lidas. */
+test('não deixa lista de opções aberta na tela', async () => {
+  configurarPadrao();
+  montarApp();
+
+  const rel = await NV.fluxo.levantamento({});
+
+  assert.equal(document.querySelectorAll('.painel-opcoes').length, 0, 'nenhuma lista deveria continuar aberta');
+  assert.deepEqual(rel.problemas, []);
+});
+
+test('não deixa lista aberta quando a opção do preset não existe', async () => {
+  configurarPadrao();
+  montarApp({ opcoesServico: ['TROCA DE TONER'] });
+
+  const resultado = await NV.fluxo.fecharOS({});
+
+  assert.equal(resultado.ok, false);
+  assert.equal(document.querySelectorAll('.painel-opcoes').length, 0, 'a lista deveria ter sido fechada antes de abortar');
+  const modal = modalAberto();
+  if (modal) modal.remove();
+});
+
 test('confere o preset contra a produção e sugere o valor parecido', async () => {
   configurarPadrao();
   montarApp({ opcoesServico: ['CONFIGURACAO DE EQUIPAMENTO', 'TROCA DE TONER'] });
