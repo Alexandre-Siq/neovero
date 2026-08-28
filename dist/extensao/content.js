@@ -43,7 +43,15 @@
   };
 
   text.tokens = function (value) {
-    return text.normalize(value).split(' ').filter(Boolean);
+    return text
+      .normalize(value)
+      .split(/[^a-z0-9]+/)
+      .filter(Boolean);
+  };
+
+  /* Só letras e números: absorve diferenças de pontuação e espaçamento. */
+  text.somenteAlfanumerico = function (value) {
+    return text.normalize(value).replace(/[^a-z0-9]/g, '');
   };
 
   /* 1 = igual, 0 = sem relação. Usado para escolher a melhor opção de um combo. */
@@ -52,6 +60,10 @@
     const t = text.normalizeLabel(target);
     if (!c || !t) return 0;
     if (c === t) return 1;
+    /* "TONNER/CILINDRO" e "TONNER / CILINDRO" são o mesmo item na prática. */
+    const ca = text.somenteAlfanumerico(c);
+    const ta = text.somenteAlfanumerico(t);
+    if (ca && ca === ta) return 0.98;
     if (c.startsWith(t) || t.startsWith(c)) return 0.9;
     if (c.includes(t)) return 0.8;
     if (t.includes(c)) return 0.7;
@@ -131,17 +143,23 @@
     return d;
   };
 
+  /* O Neovero recusa ocorrência com início igual ou posterior ao fim. */
+  dates.FOLGA_MINIMA_MIN = 1;
+
   /*
    * Calcula início/fim da ocorrência a partir da regra do preset.
    *   agora        -> termina agora, começa `duracaoMin` antes
    *   inicioAgora  -> começa agora, termina `duracaoMin` depois
    *   abertura     -> começa na abertura da OS (quando conhecida), termina agora
+   *
+   * Em qualquer regra é garantido pelo menos 1 minuto entre início e fim.
    */
   dates.resolve = function (regra, contexto) {
     const cfg = regra || {};
     const ctx = contexto || {};
     const modo = cfg.modo || 'agora';
-    const duracao = Math.max(0, Number(cfg.duracaoMin != null ? cfg.duracaoMin : 1));
+    const folga = dates.FOLGA_MINIMA_MIN;
+    const duracao = Math.max(folga, Number(cfg.duracaoMin != null ? cfg.duracaoMin : folga));
     const agora = dates.truncateSeconds(ctx.agora ? new Date(ctx.agora) : new Date());
     let inicio;
     let fim;
@@ -158,7 +176,9 @@
       fim = agora;
     }
 
-    if (inicio.getTime() > fim.getTime()) inicio = fim;
+    if (fim.getTime() - inicio.getTime() < folga * 60000) {
+      inicio = dates.addMinutes(fim, -folga);
+    }
     return { inicio: inicio, fim: fim };
   };
 
@@ -882,10 +902,22 @@
 
   const PRESETS_PADRAO = [
     {
-      id: 'ti-configuracao',
-      nome: 'TI — Configuração de equipamentos',
+      id: 'ti-automatico',
+      nome: 'TI — Serviço pela descrição (automático)',
       ocorrencia: 'SUPORTE - TI',
       servico: 'CONFIGURAÇÃO DE EQUIPAMENTOS',
+      servicoAutomatico: true,
+      causa: '',
+      local: 'interno',
+      observacao: '',
+      datas: { modo: 'agora', duracaoMin: 1 }
+    },
+    {
+      id: 'ti-configuracao',
+      nome: 'TI — Configuração de equipamentos (fixo)',
+      ocorrencia: 'SUPORTE - TI',
+      servico: 'CONFIGURAÇÃO DE EQUIPAMENTOS',
+      servicoAutomatico: false,
       causa: '',
       local: 'interno',
       observacao: '',
@@ -893,9 +925,10 @@
     },
     {
       id: 'ti-suporte-remoto',
-      nome: 'TI — Suporte remoto',
+      nome: 'TI — Suporte remoto (fixo)',
       ocorrencia: 'SUPORTE - TI',
-      servico: '',
+      servico: 'CONFIGURAÇÃO DE SOFTWARE',
+      servicoAutomatico: false,
       causa: '',
       local: 'interno',
       observacao: 'Atendimento remoto realizado.',
@@ -913,8 +946,16 @@
     fecharOsAposOcorrencia: true,
     fecharCalendarioComEsc: true,
     logNoConsole: false,
-    presetAtivo: 'ti-configuracao',
+    presetAtivo: 'ti-automatico',
     presets: PRESETS_PADRAO,
+    classificacao: {
+      minimoConfianca: 0.5,
+      confirmarAbaixoDe: 0.9,
+      reservaDoPreset: true,
+      regras: []
+    },
+    /* Lista de serviços lida da tela, para não reabrir o combo a cada fechamento. */
+    cacheServicos: { valores: [], atualizadoEm: null },
     atalhos: {
       fechar: 'Alt+F',
       lote: 'Alt+Shift+F',
@@ -1087,12 +1128,34 @@
       const erros = [];
       if (!preset || !String(preset.nome || '').trim()) erros.push('Informe um nome para o preset.');
       if (!preset || !String(preset.ocorrencia || '').trim()) erros.push('O campo "Ocorrência" é obrigatório.');
-      if (!preset || !String(preset.servico || '').trim()) erros.push('O campo "Serviço" é obrigatório.');
+      if (!preset || (!String(preset.servico || '').trim() && !preset.servicoAutomatico)) {
+        erros.push('Informe o "Serviço" ou marque a escolha automática pela descrição.');
+      }
       const modo = preset && preset.datas && preset.datas.modo;
       if (modo && ['agora', 'inicioAgora', 'abertura'].indexOf(modo) < 0) erros.push('Modo de data inválido: ' + modo);
-      const duracao = preset && preset.datas ? Number(preset.datas.duracaoMin) : 0;
-      if (Number.isNaN(duracao) || duracao < 0 || duracao > 24 * 60) erros.push('Duração deve estar entre 0 e 1440 minutos.');
+      const duracao = preset && preset.datas ? Number(preset.datas.duracaoMin) : 1;
+      if (Number.isNaN(duracao) || duracao < 1 || duracao > 24 * 60) {
+        erros.push('Duração deve estar entre 1 e 1440 minutos (mínimo de 1 min entre as datas).');
+      }
       return erros;
+    },
+
+    /* Regras vazias = usar as regras que vêm com o script. */
+    regrasDeClassificacao: function () {
+      const cfg = config.obter();
+      const regras = (cfg.classificacao && cfg.classificacao.regras) || [];
+      return regras.length ? regras : NV.classificar.REGRAS_PADRAO;
+    },
+
+    servicosEmCache: function () {
+      const cfg = config.obter();
+      return (cfg.cacheServicos && cfg.cacheServicos.valores) || [];
+    },
+
+    definirCacheServicos: function (valores) {
+      return config.aplicar({
+        cacheServicos: { valores: valores || [], atualizadoEm: new Date().toISOString() }
+      });
     },
 
     gerarId: function (nome) {
@@ -1118,6 +1181,397 @@
   };
 
   NV.config = config;
+})((globalThis.NV = globalThis.NV || {}));
+
+/* ===== src/core/classificar.js ===== */
+/*
+ * Escolhe o "Serviço" a partir da descrição da requisição.
+ *
+ * Duas camadas, na ordem:
+ *   1. regras de palavra-chave (previsíveis, editáveis pelo usuário);
+ *   2. semelhança por palavras, com radical simples de português (rede de segurança).
+ *
+ * O resultado sempre vem com a origem e as alternativas, para o usuário poder
+ * conferir e corrigir a regra em vez de ficar no escuro.
+ */
+(function (NV) {
+  'use strict';
+
+  const text = NV.text;
+  const classificar = {};
+
+  /* Lista observada na produção (ishaoc) em 28/08/2026. Serve de referência para
+     testar regras; em execução vale sempre a lista lida da tela. */
+  classificar.SERVICOS_CONHECIDOS = [
+    'ABASTECER IMPRESSORAS DE TINTA',
+    'ABERTURA DE CHAMADO EXTERNO',
+    'ADEQUAÇÃO DE CABOS',
+    'ADEQUAÇÃO DE PROJETO',
+    'ANALISE DE SISTEMA',
+    'ATALHO',
+    'BLOQUEIO DE E-MAIL',
+    'CANCELAMENTO DE ATENDIMENTO',
+    'CHECAGEM E VALIDAÇÃO DE EQUIPAMENTOS',
+    'CONFIGURAÇÃO DE ACESSO AO SENIOR',
+    'CONFIGURAÇÃO DE ACESSO AO SISTEMA FLEURY',
+    'CONFIGURAÇÃO DE ACESSO AO SLACK',
+    'CONFIGURAÇÃO DE EMAIL',
+    'CONFIGURAÇÃO DE EQUIPAMENTOS',
+    'CONFIGURAÇÃO DE GRUPOS PARA ACESSOS DE PASTAS FILESERVER',
+    'CONFIGURAÇÃO DE IMPRESSORA',
+    'CONFIGURAÇÃO DE IMPRESSORA DE SENHA / ETIQUETAS',
+    'CONFIGURAÇÃO DE PERFIL - MV',
+    'CONFIGURAÇÃO DE PERFIL NO WINDOWS',
+    'CONFIGURAÇÃO DE RIS/PACS FIDI',
+    'CONFIGURAÇÃO DE SOFTWARE',
+    'CONFIGURAÇÃO DE USUÁRIO NA INTRANET',
+    'CONFIGURAÇÃO DE USUARIO PARA ACESSO A PASTAS DO FILE SERVER',
+    'CONFIGURAÇÕES INTRANET',
+    'CONFIGURAÇÕES MV',
+    'CONFIGURAR PAINEL DE SENHA',
+    'CONFIGURAR SPARK',
+    'CRIAÇÃO DE AGENDA - MV',
+    'CRIAÇÃO DE E-MAIL',
+    'CRIAÇÃO DE PONTO DE REDE',
+    'CRIAÇÃO DE USUARIO (SAU)',
+    'CRIAÇÃO DE USUÁRIO ACTIO',
+    'CRIAÇÃO DE USUÁRIO FILESERVER',
+    'CRIAÇÃO DE USUÁRIO INTRANET',
+    'CRIAÇÃO DE USUÁRIO NEOVERO',
+    'CUTTER TRAVADO - RELÓGIO',
+    'DESENVOLVIMENTO DE RELATÓRIOS PERSONALIZADOS MV',
+    'DESENVOLVIMENTO DE TELAS MVPEP',
+    'DUVIDA',
+    'ENSINAR COMO UTILIZAR MÓDULO MV SOUL/PEP/PORTARIA/CLASSIFICAÇÃO DE RISCO',
+    'EQUIPAMENTO SEM ACESSO A REDE/INTERNET',
+    'ERRO DE IMPRESSÃO',
+    'ERRO DE PROCESSO',
+    'ESTUDO/LEVANTAMENTO PARA PROJETO',
+    'EXECUÇÃO DE PROJETO',
+    'INSTALAÇÃO DE EQUIPAMENTO',
+    'INSTALAÇÃO DE SOFTWARE OU APP',
+    'INSTALAR/CONFIGURAR RIS-PACS',
+    'LIBERAÇÃO DE ACESSO TASY/SENIOR',
+    'LIBERAÇÃO DE JAVA',
+    'LIBERAÇÃO DE PASTA DE SERVIDOR DE ARQUIVOS',
+    'LIBERAÇÃO DE SOFTWARE',
+    'LIGAR EQUIPAMENTO',
+    'LIMPEZA CABEÇA DE IMPRESSÃO',
+    'MANUTENÇÃO DE EQUIPAMENTO',
+    'MIGRAÇÃO DE ARQUIVOS',
+    'MUDANÇA DE EQUIPAMENTO',
+    'REBOOT EM RAMAL CISCO',
+    'RECUPERAÇÃO DE ARQUIVO CORROMPIDO',
+    'REPARO DE PONTO DE REDE',
+    'RESET DE REDE IMPRESSORA',
+    'RESET DE SENHA (SAU)',
+    'RESET DE SENHA ACTIO',
+    'RESET DE SENHA CALLCENTER',
+    'RESET DE SENHA DE E-MAIL',
+    'RESET DE SENHA NEOVERO',
+    'RESET DE SENHA SENIOR',
+    'SEGUNDA VIA DE LAUDO - WTT',
+    'SERVIÇO TRAVADO',
+    'SUBSTITUIÇÃO DE TONNER/CILINDRO',
+    'SUPORTE PARA ARQUIVOS DE TEXTO E PLANILHAS',
+    'TROCA DE BOBINA DO RELOGIO DE PONTO',
+    'TROCA DE EQUIPAMENTO',
+    'TROCA DE PERIFERICOS',
+    'VERIFICAÇÃO DE EQUIPAMENTO'
+  ];
+
+  /*
+   * Regras iniciais. São um chute informado a partir dos nomes dos serviços —
+   * a ideia é você corrigir em ⚙ → Classificação conforme for usando.
+   * Ordem não importa: vence a palavra-chave mais longa que casar. `peso` ajusta essa
+   * disputa: +1 para regras específicas ("mouse") e -1 para genéricas ("quebrado"),
+   * senão "mouse quebrado" cairia em manutenção em vez de troca de periférico.
+   */
+  classificar.REGRAS_PADRAO = [
+    { quando: ['nao liga', 'não liga', 'nao esta ligando', 'nao ligando', 'sem energia', 'nao inicializa', 'nao da boot'], servico: 'LIGAR EQUIPAMENTO' },
+    { quando: ['nao imprime', 'erro ao imprimir', 'erro de impressao', 'falha na impressao', 'nao esta imprimindo'], servico: 'ERRO DE IMPRESSÃO' },
+    { quando: ['toner', 'tonner', 'cilindro'], servico: 'SUBSTITUIÇÃO DE TONNER/CILINDRO', peso: 1 },
+    { quando: ['sem tinta', 'abastecer tinta', 'trocar tinta', 'cartucho'], servico: 'ABASTECER IMPRESSORAS DE TINTA' },
+    { quando: ['cabeca de impressao', 'impressao borrada', 'saindo falhado', 'listras'], servico: 'LIMPEZA CABEÇA DE IMPRESSÃO' },
+    { quando: ['impressora de senha', 'impressora de etiqueta', 'etiquetas'], servico: 'CONFIGURAÇÃO DE IMPRESSORA DE SENHA / ETIQUETAS' },
+    { quando: ['instalar impressora', 'configurar impressora', 'adicionar impressora'], servico: 'CONFIGURAÇÃO DE IMPRESSORA' },
+    { quando: ['impressora sem rede', 'impressora offline', 'resetar rede da impressora'], servico: 'RESET DE REDE IMPRESSORA' },
+    { quando: ['painel de senha'], servico: 'CONFIGURAR PAINEL DE SENHA' },
+    { quando: ['sem internet', 'sem rede', 'sem acesso a rede', 'nao conecta na rede', 'nao pega wifi', 'wi-fi', 'wifi'], servico: 'EQUIPAMENTO SEM ACESSO A REDE/INTERNET' },
+    { quando: ['novo ponto de rede', 'criar ponto de rede', 'ponto de rede novo'], servico: 'CRIAÇÃO DE PONTO DE REDE' },
+    { quando: ['ponto de rede quebrado', 'reparar ponto de rede', 'consertar ponto de rede'], servico: 'REPARO DE PONTO DE REDE' },
+    { quando: ['cabo', 'cabeamento', 'organizar cabos'], servico: 'ADEQUAÇÃO DE CABOS' },
+    { quando: ['senha do email', 'senha de e-mail', 'resetar senha do outlook'], servico: 'RESET DE SENHA DE E-MAIL' },
+    { quando: ['senha do senior', 'senha senior'], servico: 'RESET DE SENHA SENIOR' },
+    { quando: ['senha do actio', 'senha actio'], servico: 'RESET DE SENHA ACTIO' },
+    { quando: ['senha do sau', 'senha sau'], servico: 'RESET DE SENHA (SAU)' },
+    { quando: ['senha do neovero', 'senha neovero'], servico: 'RESET DE SENHA NEOVERO' },
+    { quando: ['senha do callcenter', 'senha callcenter'], servico: 'RESET DE SENHA CALLCENTER' },
+    { quando: ['criar email', 'criar e-mail', 'novo email', 'novo e-mail'], servico: 'CRIAÇÃO DE E-MAIL' },
+    { quando: ['bloquear email', 'bloquear e-mail', 'desligamento'], servico: 'BLOQUEIO DE E-MAIL' },
+    { quando: ['configurar email', 'configurar e-mail', 'outlook'], servico: 'CONFIGURAÇÃO DE EMAIL' },
+    { quando: ['usuario intranet', 'acesso a intranet'], servico: 'CRIAÇÃO DE USUÁRIO INTRANET' },
+    { quando: ['acesso a pasta', 'liberar pasta', 'pasta do servidor', 'file server', 'fileserver'], servico: 'LIBERAÇÃO DE PASTA DE SERVIDOR DE ARQUIVOS' },
+    { quando: ['instalar programa', 'instalar software', 'instalar aplicativo', 'instalar app'], servico: 'INSTALAÇÃO DE SOFTWARE OU APP' },
+    { quando: ['liberar software', 'liberar programa'], servico: 'LIBERAÇÃO DE SOFTWARE' },
+    { quando: ['java'], servico: 'LIBERAÇÃO DE JAVA', peso: 1 },
+    { quando: ['slack'], servico: 'CONFIGURAÇÃO DE ACESSO AO SLACK' },
+    { quando: ['spark'], servico: 'CONFIGURAR SPARK' },
+    { quando: ['ramal', 'telefone cisco'], servico: 'REBOOT EM RAMAL CISCO', peso: 1 },
+    { quando: ['bobina', 'relogio de ponto'], servico: 'TROCA DE BOBINA DO RELOGIO DE PONTO' },
+    { quando: ['cutter'], servico: 'CUTTER TRAVADO - RELÓGIO' },
+    { quando: ['segunda via de laudo', 'laudo wtt'], servico: 'SEGUNDA VIA DE LAUDO - WTT' },
+    { quando: ['mouse', 'teclado', 'periferico', 'monitor', 'headset', 'webcam'], servico: 'TROCA DE PERIFERICOS', peso: 1 },
+    { quando: ['trocar o computador', 'trocar equipamento', 'substituir equipamento'], servico: 'TROCA DE EQUIPAMENTO' },
+    { quando: ['mudar de lugar', 'mudanca de equipamento', 'realocar'], servico: 'MUDANÇA DE EQUIPAMENTO' },
+    { quando: ['instalar equipamento', 'equipamento novo'], servico: 'INSTALAÇÃO DE EQUIPAMENTO' },
+    { quando: ['manutencao', 'conserto', 'defeito', 'quebrado'], servico: 'MANUTENÇÃO DE EQUIPAMENTO', peso: -1 },
+    { quando: ['travando', 'travado', 'lento', 'congelando'], servico: 'SERVIÇO TRAVADO', peso: -1 },
+    { quando: ['arquivo corrompido', 'nao abre o arquivo'], servico: 'RECUPERAÇÃO DE ARQUIVO CORROMPIDO' },
+    { quando: ['excel', 'planilha', 'word'], servico: 'SUPORTE PARA ARQUIVOS DE TEXTO E PLANILHAS' },
+    { quando: ['duvida', 'como faco', 'como fazer'], servico: 'DUVIDA', peso: -1 },
+    { quando: ['perfil mv'], servico: 'CONFIGURAÇÃO DE PERFIL - MV' },
+    { quando: ['perfil do windows', 'perfil no windows'], servico: 'CONFIGURAÇÃO DE PERFIL NO WINDOWS' },
+    { quando: ['agenda mv', 'criar agenda'], servico: 'CRIAÇÃO DE AGENDA - MV' },
+    { quando: ['ris', 'pacs'], servico: 'INSTALAR/CONFIGURAR RIS-PACS' },
+    { quando: ['fidi'], servico: 'CONFIGURAÇÃO DE RIS/PACS FIDI' },
+    { quando: ['tasy', 'acesso senior'], servico: 'LIBERAÇÃO DE ACESSO TASY/SENIOR' },
+    { quando: ['fleury'], servico: 'CONFIGURAÇÃO DE ACESSO AO SISTEMA FLEURY' },
+    { quando: ['atalho'], servico: 'ATALHO' },
+    { quando: ['migrar arquivos', 'migracao de arquivos', 'backup'], servico: 'MIGRAÇÃO DE ARQUIVOS' },
+    { quando: ['chamado externo', 'assistencia tecnica', 'fornecedor'], servico: 'ABERTURA DE CHAMADO EXTERNO' },
+    { quando: ['verificar equipamento', 'checar equipamento'], servico: 'VERIFICAÇÃO DE EQUIPAMENTO', peso: -1 }
+  ];
+
+  const STOPWORDS = [
+    'de', 'da', 'do', 'das', 'dos', 'e', 'ou', 'a', 'o', 'as', 'os', 'em', 'no', 'na', 'nos', 'nas',
+    'para', 'por', 'com', 'ao', 'aos', 'um', 'uma', 'que', 'se', 'ja', 'pra', 'pro', 'sob', 'sobre',
+    'esta', 'estao', 'foi', 'ser', 'esse', 'essa', 'este', 'esta', 'isso', 'meu', 'minha', 'sua', 'seu',
+    'favor', 'gentileza', 'bom', 'dia', 'tarde', 'noite', 'obrigado'
+  ];
+
+  const SUFIXOS = [
+    'amentos', 'imentos', 'amento', 'imento', 'acoes', 'icoes', 'coes', 'acao', 'ucao', 'ados', 'adas',
+    'idos', 'idas', 'ando', 'endo', 'indo', 'ado', 'ada', 'ido', 'ida', 'oes', 'ais', 'eis', 'ar', 'er',
+    'ir', 'ao', 'ns', 's'
+  ];
+
+  /* Radical rústico de português: aproxima "ligando"/"ligar" e "configuração"/"configurar". */
+  classificar.raiz = function (palavra) {
+    let t = text.normalize(palavra).replace(/[^a-z0-9]/g, '');
+    for (let i = 0; i < SUFIXOS.length; i += 1) {
+      const s = SUFIXOS[i];
+      if (t.length - s.length >= 3 && t.slice(-s.length) === s) {
+        t = t.slice(0, -s.length);
+        break;
+      }
+    }
+    return t;
+  };
+
+  classificar.palavrasRelevantes = function (frase) {
+    return text
+      .normalize(frase)
+      .replace(/[^a-z0-9\s]/g, ' ')
+      .split(/\s+/)
+      .filter(function (p) {
+        return p.length >= 2 && STOPWORDS.indexOf(p) < 0;
+      });
+  };
+
+  classificar.raizes = function (frase) {
+    const vistos = [];
+    classificar.palavrasRelevantes(frase).forEach(function (p) {
+      const r = classificar.raiz(p);
+      if (r && vistos.indexOf(r) < 0) vistos.push(r);
+    });
+    return vistos;
+  };
+
+  /*
+   * Casa a palavra-chave em começo de palavra, com tolerância proporcional ao tamanho:
+   * palavra curta exige casamento exato (senão "ris" casaria com "risco"), média aceita
+   * plural e longa aceita qualquer terminação ("travado" pega "travados").
+   */
+  function contem(descricaoNormalizada, chave) {
+    const alvo = text.normalize(chave).replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+    if (!alvo) return false;
+    const palavras = alvo.split(' ');
+    const ultima = palavras[palavras.length - 1];
+    const terminacao = ultima.length <= 3 ? '(?:\\s|$)' : ultima.length <= 5 ? '(?:s|es)?(?:\\s|$)' : '[a-z]*';
+    const escapado = alvo.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/ /g, '\\s+');
+    return new RegExp('(^|\\s)' + escapado + terminacao).test(descricaoNormalizada);
+  }
+  classificar.contem = contem;
+
+  /* 0..1 — proporção das palavras do nome do serviço presentes na descrição. */
+  classificar.pontuar = function (descricao, opcao) {
+    const raizesOpcao = classificar.raizes(opcao);
+    if (!raizesOpcao.length) return 0;
+    const raizesDescricao = classificar.raizes(descricao);
+    if (!raizesDescricao.length) return 0;
+    let acertos = 0;
+    raizesOpcao.forEach(function (r) {
+      const bateu = raizesDescricao.some(function (d) {
+        return d === r || (r.length >= 4 && d.indexOf(r) === 0) || (d.length >= 4 && r.indexOf(d) === 0);
+      });
+      if (bateu) acertos += 1;
+    });
+    return acertos / raizesOpcao.length;
+  };
+
+  /*
+   * Escolhe o serviço.
+   * options: { regras, opcoes, minimo }
+   * Retorno: { descricao, escolhido, confianca, origem, regra, alternativas, avisos }
+   */
+  classificar.sugerir = function (descricao, opcoes, options) {
+    const opts = options || {};
+    const lista = (opcoes && opcoes.length ? opcoes : classificar.SERVICOS_CONHECIDOS).filter(function (o) {
+      return o && !/^selecione/i.test(o);
+    });
+    const regras = opts.regras || classificar.REGRAS_PADRAO;
+    const minimo = opts.minimo != null ? opts.minimo : 0.5;
+    const avisos = [];
+    const resultado = {
+      descricao: descricao || '',
+      escolhido: null,
+      confianca: 0,
+      origem: null,
+      regra: null,
+      alternativas: [],
+      avisos: avisos
+    };
+
+    if (!descricao || !text.normalize(descricao)) {
+      avisos.push('A descrição do chamado está vazia ou não foi lida.');
+      return resultado;
+    }
+
+    const descricaoNormalizada = text.normalize(descricao).replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+
+    /* Ranking por semelhança, sempre calculado (serve de alternativa mesmo com regra). */
+    const ranking = lista
+      .map(function (opcao) {
+        return { opcao: opcao, score: Number(classificar.pontuar(descricao, opcao).toFixed(3)) };
+      })
+      .filter(function (r) {
+        return r.score > 0;
+      })
+      .sort(function (a, b) {
+        if (b.score !== a.score) return b.score - a.score;
+        return a.opcao.length - b.opcao.length;
+      });
+    resultado.alternativas = ranking.slice(0, 6);
+
+    /* Camada 1: regras. Vence a palavra-chave mais longa que casar. */
+    let melhorRegra = null;
+    regras.forEach(function (regra) {
+      if (!regra || !regra.servico) return;
+      (regra.quando || []).forEach(function (chave) {
+        if (!contem(descricaoNormalizada, chave)) return;
+        const tamanho = text.normalize(chave).length + (Number(regra.peso) || 0) * 10;
+        if (!melhorRegra || tamanho > melhorRegra.tamanho) {
+          melhorRegra = { servico: regra.servico, chave: chave, tamanho: tamanho };
+        }
+      });
+    });
+
+    if (melhorRegra) {
+      const naLista = lista.filter(function (o) {
+        return text.equals(o, melhorRegra.servico);
+      })[0];
+      if (naLista) {
+        resultado.escolhido = naLista;
+        resultado.confianca = 0.95;
+        resultado.origem = 'regra';
+        resultado.regra = { chave: melhorRegra.chave, servico: naLista };
+        return resultado;
+      }
+      const parecido = text.pickBest(lista, melhorRegra.servico, { min: 0.7 });
+      avisos.push(
+        'A regra “' + melhorRegra.chave + '” aponta para “' + melhorRegra.servico +
+          '”, que não existe na lista atual' + (parecido ? '. Usei o mais próximo: “' + parecido.item + '”' : '')
+      );
+      if (parecido) {
+        resultado.escolhido = parecido.item;
+        resultado.confianca = 0.8;
+        resultado.origem = 'regra-aproximada';
+        resultado.regra = { chave: melhorRegra.chave, servico: melhorRegra.servico };
+        return resultado;
+      }
+    }
+
+    /* Camada 2: semelhança. */
+    if (ranking.length && ranking[0].score >= minimo) {
+      resultado.escolhido = ranking[0].opcao;
+      resultado.confianca = ranking[0].score;
+      resultado.origem = 'similaridade';
+      return resultado;
+    }
+
+    avisos.push(
+      'Nenhuma regra casou e a semelhança ficou abaixo do mínimo' +
+        (ranking.length ? ' (melhor: “' + ranking[0].opcao + '”, ' + ranking[0].score + ')' : '')
+    );
+    return resultado;
+  };
+
+  /* ------------ regras em texto, para edição na tela ------------ */
+
+  classificar.regrasParaTexto = function (regras) {
+    return (regras || [])
+      .map(function (r) {
+        return (r.quando || []).join(', ') + ' => ' + r.servico;
+      })
+      .join('\n');
+  };
+
+  classificar.textoParaRegras = function (texto) {
+    const regras = [];
+    const erros = [];
+    String(texto || '')
+      .split('\n')
+      .forEach(function (linha, i) {
+        const limpa = linha.trim();
+        if (!limpa || limpa.charAt(0) === '#') return;
+        const partes = limpa.split('=>');
+        if (partes.length !== 2) {
+          erros.push('Linha ' + (i + 1) + ': use o formato "palavra, outra palavra => SERVIÇO".');
+          return;
+        }
+        const quando = partes[0]
+          .split(',')
+          .map(function (p) {
+            return p.trim();
+          })
+          .filter(Boolean);
+        const servico = partes[1].trim();
+        if (!quando.length || !servico) {
+          erros.push('Linha ' + (i + 1) + ': falta palavra-chave ou serviço.');
+          return;
+        }
+        regras.push({ quando: quando, servico: servico });
+      });
+    return { regras: regras, erros: erros };
+  };
+
+  /* Aponta regras cujo serviço não existe na lista lida da tela. */
+  classificar.conferirRegras = function (regras, opcoes) {
+    const lista = opcoes && opcoes.length ? opcoes : classificar.SERVICOS_CONHECIDOS;
+    return (regras || [])
+      .filter(function (r) {
+        return !lista.some(function (o) {
+          return text.equals(o, r.servico);
+        });
+      })
+      .map(function (r) {
+        const parecido = text.pickBest(lista, r.servico, { min: 0.7 });
+        return { servico: r.servico, sugestao: parecido ? parecido.item : null };
+      });
+  };
+
+  NV.classificar = classificar;
 })((globalThis.NV = globalThis.NV || {}));
 
 /* ===== src/core/localizar.js ===== */
@@ -1225,6 +1679,78 @@
     }
     return null;
   };
+
+  /*
+   * Texto da requisição, que é a base para classificar o serviço.
+   * Estratégias: seletor calibrado -> texto após o rótulo "Requisição" ->
+   * maior texto livre dentro da seção "Requisição de Serviço".
+   */
+  localizar.descricaoDaRequisicao = function (janela) {
+    const escopo = janela || localizar.janelaOs();
+
+    const calibrado = NV.config.seletor('descricaoRequisicao');
+    if (calibrado) {
+      const el = dom.porCaminhoCss(calibrado);
+      if (el) {
+        const valor = dom.texto(el);
+        if (valor) return valor;
+      }
+    }
+
+    const irrelevante = function (valor) {
+      if (!valor || valor.length < 8) return true;
+      if (NV.dates.parse(valor)) return true;
+      if (/^\d+$/.test(valor.replace(/\s/g, ''))) return true;
+      return ROTULOS_DA_OS.indexOf(text.normalize(valor)) >= 0;
+    };
+
+    /* Procura primeiro dentro da seção "Requisição de Serviço". */
+    const secao = dom.acharPorTexto(escopo, ['Requisição de Serviço'], { min: 0.95 });
+    if (secao) {
+      let container = secao.parentElement;
+      for (let nivel = 0; nivel < 3 && container; nivel += 1) {
+        const dentro = dom.elementos(container);
+        const achado = textoAposRotulo(dentro, 'Requisição', irrelevante);
+        if (achado) return achado;
+        const livres = dentro
+          .map(function (el) {
+            return dom.textoProprio(el);
+          })
+          .filter(function (valor) {
+            return !irrelevante(valor);
+          })
+          .sort(function (a, b) {
+            return b.length - a.length;
+          });
+        if (livres.length) return livres[0];
+        container = container.parentElement;
+      }
+    }
+
+    /* Sem a seção: varre a janela em ordem de documento. */
+    return textoAposRotulo(dom.elementos(escopo), 'Requisição', irrelevante);
+  };
+
+  /* Rótulos da tela da OS que nunca são a descrição. */
+  const ROTULOS_DA_OS = [
+    'aberta por', 'requisicao', 'requisicao de servico', 'numero', 'requisitante', 'observacoes',
+    'observacao', 'ocorrencias', 'ocorrencia', 'abertura', 'atendimento', 'solucao', 'prazo encerramento',
+    'equipamento', 'localizacao', 'centros de custo', 'disponibilidade', 'oficina', 'tipo', 'prioridade',
+    'complexidade', 'responsavel', 'projeto', 'adicionar', 'monitor de atendimento', 'ordem de servico',
+    'funcionando', 'selecione ...', 'servico', 'produto', 'pendencia', 'checklist', 'servico externo',
+    'labels', 'anexo', 'assinatura', 'causa', 'data da ocorrencia', 'data final do servico'
+  ];
+
+  function textoAposRotulo(elementos, rotulo, irrelevante) {
+    for (let i = 0; i < elementos.length; i += 1) {
+      if (!text.equals(dom.textoProprio(elementos[i]), rotulo)) continue;
+      for (let j = i + 1; j < Math.min(elementos.length, i + 12); j += 1) {
+        const valor = dom.textoProprio(elementos[j]);
+        if (!irrelevante(valor)) return valor;
+      }
+    }
+    return null;
+  }
 
   localizar.botaoOcorrencia = function (janela) {
     const escopo = janela || localizar.janelaOs();
@@ -1813,6 +2339,82 @@
     }, { timeout: tempos.modal, intervalo: tempos.intervalo, rotulo: 'modal "Nova Ocorrência"' });
   };
 
+  /*
+   * Lista de serviços: usa o cache para não abrir o combo em todo fechamento,
+   * e relê da tela quando o cache está vazio ou quando pedimos explicitamente.
+   */
+  fluxo.opcoesDeServico = async function (modal, options) {
+    const opts = options || {};
+    if (!opts.forcarLeitura) {
+      const cache = NV.config.servicosEmCache();
+      if (cache.length) return { opcoes: cache, origem: 'cache' };
+    }
+    const el = localizar.campoServico(modal);
+    if (!el) throw new async.PassoError('Campo "Serviço" não encontrado para ler as opções');
+    const lidas = await campos.listarOpcoes(el, { rotulo: 'Serviço' });
+    if (lidas && lidas.length) NV.config.definirCacheServicos(lidas);
+    return { opcoes: lidas || [], origem: 'tela' };
+  };
+
+  /*
+   * Decide o serviço pela descrição da requisição.
+   * Retorna { servico, sugestao, origem } ou lança quando não há como decidir.
+   */
+  fluxo.escolherServico = async function (modal, preset, contexto, options) {
+    const opts = options || {};
+    const cfg = NV.config.obter();
+    const conf = cfg.classificacao;
+    const descricao = contexto.descricao;
+
+    if (!descricao) {
+      if (conf.reservaDoPreset && preset.servico) {
+        return { servico: preset.servico, origem: 'preset', motivo: 'descrição do chamado não foi lida' };
+      }
+      throw new async.PassoError('Não consegui ler a descrição da requisição para classificar o serviço');
+    }
+
+    const lista = await fluxo.opcoesDeServico(modal, { forcarLeitura: opts.forcarLeitura });
+    const sugestao = NV.classificar.sugerir(descricao, lista.opcoes, {
+      regras: NV.config.regrasDeClassificacao(),
+      minimo: conf.minimoConfianca
+    });
+
+    if (sugestao.escolhido && sugestao.confianca >= conf.confirmarAbaixoDe) {
+      return { servico: sugestao.escolhido, sugestao: sugestao, origem: sugestao.origem };
+    }
+
+    /* Confiança intermediária: quem decide é o usuário, com as alternativas na mão. */
+    if (sugestao.escolhido && opts.aoEscolherServico) {
+      const escolha = await opts.aoEscolherServico({
+        descricao: descricao,
+        sugestao: sugestao,
+        preset: preset,
+        opcoes: lista.opcoes
+      });
+      if (escolha === null) throw new fluxo.Cancelado();
+      if (escolha) return { servico: escolha, sugestao: sugestao, origem: 'usuario' };
+    }
+
+    if (sugestao.escolhido) {
+      return { servico: sugestao.escolhido, sugestao: sugestao, origem: sugestao.origem };
+    }
+
+    if (conf.reservaDoPreset && preset.servico) {
+      return {
+        servico: preset.servico,
+        sugestao: sugestao,
+        origem: 'preset',
+        motivo: 'classificação abaixo do mínimo'
+      };
+    }
+
+    throw new async.PassoError('Não consegui classificar o serviço a partir da descrição', {
+      disponiveis: (sugestao.alternativas || []).map(function (a) {
+        return a.opcao + ' (' + a.score + ')';
+      })
+    });
+  };
+
   fluxo.preencherModal = async function (modal, preset, contexto, passo) {
     const datas = NV.dates.resolve(preset.datas, { agora: contexto.agora, aberturaOS: contexto.aberturaOS });
     /*
@@ -1845,8 +2447,27 @@
       }, { opcional: true });
     }
 
-    await passo('Selecionar serviço: ' + preset.servico, function () {
-      return campos.definirCombo(localizar.campoServico(modal), preset.servico, { rotulo: 'Serviço' });
+    let servico = preset.servico;
+    if (preset.servicoAutomatico) {
+      const decidido = await passo('Classificar serviço pela descrição', async function () {
+        const escolha = await fluxo.escolherServico(modal, preset, contexto, {
+          aoEscolherServico: contexto.aoEscolherServico
+        });
+        return {
+          descricao: NV.text.truncate(contexto.descricao || '', 120),
+          servico: escolha.servico,
+          origem: escolha.origem,
+          confianca: escolha.sugestao ? escolha.sugestao.confianca : null,
+          regra: escolha.sugestao && escolha.sugestao.regra ? escolha.sugestao.regra.chave : null,
+          alternativas: escolha.sugestao ? escolha.sugestao.alternativas : null,
+          motivo: escolha.motivo || null
+        };
+      }, tolerante);
+      if (decidido && decidido.servico) servico = decidido.servico;
+    }
+
+    await passo('Selecionar serviço: ' + servico, function () {
+      return campos.definirCombo(localizar.campoServico(modal), servico, { rotulo: 'Serviço' });
     }, tolerante);
 
     if (preset.observacao) {
@@ -1935,7 +2556,14 @@
     relatorio.numeroOs = janelaValida ? localizar.numeroOs(janela) : null;
     const abertura = janelaValida ? localizar.dataAbertura(janela) : null;
     relatorio.aberturaOs = abertura ? NV.dates.format(abertura) : null;
+    relatorio.descricao = janelaValida ? localizar.descricaoDaRequisicao(janela) : null;
     if (janelaValida && !relatorio.numeroOs) relatorio.problemas.push('Não consegui ler o número da OS no título da janela');
+    if (janelaValida && !relatorio.descricao) {
+      relatorio.problemas.push(
+        'Não consegui ler a descrição da requisição (necessária para classificar o serviço). ' +
+          'Use ⚙ → Seletores → Aprender em "Descrição da requisição".'
+      );
+    }
 
     const escopo = janelaValida ? janela : document;
     const botaoOcorrencia = anotar('botaoOcorrencia', 'Botão "Ocorrência"', localizar.botaoOcorrencia(escopo));
@@ -2045,6 +2673,24 @@
       });
     }
 
+    /* Mostra como a descrição seria classificada, para o usuário ajustar as regras. */
+    if (relatorio.descricao && (relatorio.opcoes.servico || []).length) {
+      relatorio.classificacao = NV.classificar.sugerir(relatorio.descricao, relatorio.opcoes.servico, {
+        regras: NV.config.regrasDeClassificacao(),
+        minimo: cfg.classificacao.minimoConfianca
+      });
+      if (!relatorio.classificacao.escolhido) {
+        relatorio.problemas.push('A descrição não bateu com nenhum serviço: ajuste as regras em ⚙ → Classificação.');
+      }
+      const regrasQuebradas = NV.classificar.conferirRegras(NV.config.regrasDeClassificacao(), relatorio.opcoes.servico);
+      if (regrasQuebradas.length) {
+        relatorio.regrasInvalidas = regrasQuebradas;
+        relatorio.problemas.push(
+          regrasQuebradas.length + ' regra(s) apontam para serviços que não existem na lista (veja o JSON completo).'
+        );
+      }
+    }
+
     /* Fecha o modal sem salvar. */
     try {
       const cancelar = dom.acharBotao(modal, cfg.rotulos.cancelarModal, { min: 0.98 });
@@ -2097,7 +2743,12 @@
 
       const numero = localizar.numeroOs(janela);
       const aberturaOS = localizar.dataAbertura(janela);
-      NV.log.info('OS em foco', { numero: numero, abertura: aberturaOS ? NV.dates.format(aberturaOS) : null });
+      const descricao = localizar.descricaoDaRequisicao(janela);
+      NV.log.info('OS em foco', {
+        numero: numero,
+        abertura: aberturaOS ? NV.dates.format(aberturaOS) : null,
+        descricao: descricao ? text.truncate(descricao, 120) : null
+      });
 
       /* Simulação não deve mexer em nada: iniciar atendimento altera o estado da OS. */
       if (cfg.autoIniciarAtendimento && !execucaoSeca) {
@@ -2117,7 +2768,13 @@
       const datas = await fluxo.preencherModal(
         modal,
         preset,
-        { agora: opts.agora, aberturaOS: aberturaOS, tolerante: execucaoSeca },
+        {
+          agora: opts.agora,
+          aberturaOS: aberturaOS,
+          descricao: descricao,
+          aoEscolherServico: opts.aoEscolherServico,
+          tolerante: execucaoSeca
+        },
         passo
       );
 
@@ -2563,6 +3220,27 @@
     linhas.push('Documentos na página (1 = sem iframe): ' + (r.documentos != null ? r.documentos : '?'));
     linhas.push('OS em foco: ' + (r.numeroOs || 'não identificada') + ' · abertura: ' + (r.aberturaOs || 'não lida'));
     linhas.push('Modal abriu: ' + (r.modalAberto ? 'sim' : 'não') + (r.modalAberto ? ' · fechou: ' + (r.modalFechado ? 'sim' : 'não') : ''));
+    linhas.push('Descrição lida: ' + (r.descricao ? '“' + r.descricao + '”' : 'NÃO LIDA'));
+    if (r.classificacao) {
+      const c = r.classificacao;
+      linhas.push(
+        'Classificação: ' +
+          (c.escolhido
+            ? c.escolhido + ' (' + Math.round(c.confianca * 100) + '%, ' + c.origem +
+              (c.regra ? ', regra “' + c.regra.chave + '”' : '') + ')'
+            : 'nenhuma')
+      );
+      if ((c.alternativas || []).length) {
+        linhas.push(
+          'Alternativas: ' +
+            c.alternativas
+              .map(function (a) {
+                return a.opcao + ' (' + Math.round(a.score * 100) + '%)';
+              })
+              .join(' · ')
+        );
+      }
+    }
     linhas.push('');
 
     linhas.push('-- Elementos --');
@@ -2981,7 +3659,8 @@
             preset: NV.config.presetAtivo(),
             aoProgresso: aoProgresso,
             sinal: sinalAtual,
-            aoConfirmar: confirmarFechamento
+            aoConfirmar: confirmarFechamento,
+            aoEscolherServico: escolherServico
           },
           opcoes || {}
         )
@@ -3043,6 +3722,52 @@
       sobre.querySelector('[data-nao]').addEventListener('click', () => fechar(false));
       sobre.addEventListener('click', function (ev) {
         if (ev.target === sobre) fechar(false);
+      });
+    });
+  }
+
+  /* Confiança intermediária: o usuário escolhe entre as alternativas ranqueadas. */
+  function escolherServico(info) {
+    return new Promise(function (resolve) {
+      const alternativas = (info.sugestao.alternativas || []).slice(0, 6);
+      const html =
+        '<p style="margin:0 0 10px">Descrição do chamado:</p>' +
+        '<p style="margin:0 0 12px"><code>' + esc(NV.text.truncate(info.descricao, 220)) + '</code></p>' +
+        '<div class="aviso">Sugestão: <b>' + esc(info.sugestao.escolhido) + '</b> · confiança ' +
+        Math.round((info.sugestao.confianca || 0) * 100) + '%' +
+        (info.sugestao.regra ? ' (regra “' + esc(info.sugestao.regra.chave) + '”)' : ' (semelhança)') +
+        '</div>' +
+        '<ul class="lista" style="max-height:260px">' +
+        alternativas
+          .map(function (a) {
+            return (
+              '<li><span class="nome">' + esc(a.opcao) + '</span>' +
+              '<span class="badge">' + Math.round(a.score * 100) + '%</span>' +
+              '<button class="acao" data-opcao="' + esc(a.opcao) + '">Usar</button></li>'
+            );
+          })
+          .join('') +
+        '</ul>';
+
+      const sobre = abrirSobreposicao(
+        'Qual serviço usar?',
+        html,
+        '<button class="acao secundaria" data-cancelar>Cancelar fechamento</button>' +
+          (info.preset.servico ? '<button class="acao secundaria" data-preset>Usar o do preset</button>' : '') +
+          '<button class="acao" data-sugerido>Usar a sugestão</button>'
+      );
+
+      const responder = function (valor) {
+        sobre.remove();
+        resolve(valor);
+      };
+      sobre.addEventListener('click', function (ev) {
+        const alvo = ev.target;
+        if (alvo.dataset && alvo.dataset.opcao) responder(alvo.dataset.opcao);
+        else if (alvo.dataset && alvo.dataset.sugerido !== undefined) responder(info.sugestao.escolhido);
+        else if (alvo.dataset && alvo.dataset.preset !== undefined) responder(info.preset.servico);
+        else if (alvo.dataset && alvo.dataset.cancelar !== undefined) responder(null);
+        else if (alvo === sobre) responder(null);
       });
     });
   }
@@ -3123,7 +3848,29 @@
       '<p class="aviso-inline">OS em foco: <b>' + esc(relatorio.numeroOs || 'não identificada') + '</b> · ' +
       'abertura: ' + esc(relatorio.aberturaOs || 'não lida') + ' · ' +
       'documentos na página: ' + relatorio.documentos + (relatorio.documentos > 1 ? ' (usa iframe)' : '') + '</p>' +
+      '<p class="aviso-inline">Descrição lida: ' +
+      (relatorio.descricao ? '<code>' + esc(NV.text.truncate(relatorio.descricao, 200)) + '</code>' : '<b>não lida</b>') +
+      '</p>' +
       '</fieldset>' +
+      (relatorio.classificacao
+        ? '<fieldset><legend>Classificação do serviço</legend>' +
+          (relatorio.classificacao.escolhido
+            ? '<p class="aviso-inline">→ <b>' + esc(relatorio.classificacao.escolhido) + '</b> · ' +
+              Math.round(relatorio.classificacao.confianca * 100) + '% · ' + esc(relatorio.classificacao.origem) +
+              (relatorio.classificacao.regra ? ' (regra “' + esc(relatorio.classificacao.regra.chave) + '”)' : '') + '</p>'
+            : '<p class="aviso-inline" style="color:#f87171">Nenhum serviço classificado para esta descrição.</p>') +
+          ((relatorio.classificacao.alternativas || []).length
+            ? '<p class="aviso-inline">Alternativas: ' +
+              esc(
+                relatorio.classificacao.alternativas
+                  .map(function (a) {
+                    return a.opcao + ' (' + Math.round(a.score * 100) + '%)';
+                  })
+                  .join(' · ')
+              ) + '</p>'
+            : '') +
+          '</fieldset>'
+        : '') +
       '<fieldset><legend>Elementos</legend><ul class="lista" style="max-height:none">' +
       (relatorio.elementos || []).map(linhaElemento).join('') +
       '</ul></fieldset>' +
@@ -3255,6 +4002,7 @@
   /* ---------------- configuração ---------------- */
 
   const CHAVES_SELETOR = [
+    ['descricaoRequisicao', 'Descrição da requisição (texto do chamado)'],
     ['botaoOcorrencia', 'Botão "Ocorrência" (na OS)'],
     ['botaoFecharOs', 'Botão "Fechar OS"'],
     ['botaoIniciarAtendimento', 'Botão "Iniciar Atendimento"'],
@@ -3285,6 +4033,10 @@
       '<label class="campo">Interno/Externo<select data-f="local"><option value="interno">Interno</option><option value="externo">Externo</option><option value="">Não alterar</option></select></label>' +
       '</div>' +
       '<label class="campo">Observação (opcional)<textarea data-f="observacao"></textarea></label>' +
+      '<label class="check"><input type="checkbox" data-f="servicoAutomatico">' +
+      '<span>Escolher o serviço pela descrição do chamado' +
+      '<small>Usa as regras de ⚙ → Classificação. O campo "Serviço" acima passa a ser a reserva ' +
+      'para quando não houver classificação confiável.</small></span></label>' +
       '</fieldset>' +
       '<fieldset><legend>Datas</legend>' +
       '<div class="grade2">' +
@@ -3354,6 +4106,56 @@
     );
   }
 
+  function htmlAbaClassificacao(cfg) {
+    const regras = NV.config.regrasDeClassificacao();
+    const cache = cfg.cacheServicos || {};
+    const usandoPadrao = !(cfg.classificacao.regras || []).length;
+    return (
+      '<div class="aviso">As regras decidem o <b>Serviço</b> a partir da descrição do chamado. ' +
+      'Formato: <code>palavra, outra palavra =&gt; NOME DO SERVIÇO</code>, uma por linha. ' +
+      'Vence a palavra-chave mais longa que aparecer no texto; se nenhuma casar, entra a semelhança por palavras.</div>' +
+      '<fieldset><legend>Lista de serviços da produção</legend>' +
+      '<p class="aviso-inline">' +
+      (cache.valores && cache.valores.length
+        ? cache.valores.length + ' serviços em cache (lidos em ' + esc(String(cache.atualizadoEm || '').slice(0, 16).replace('T', ' ')) + ').'
+        : 'Nenhuma lista lida ainda — use "Conferir tela" com um chamado aberto, ou o botão abaixo.') +
+      '</p>' +
+      '<button class="acao secundaria" data-ler-servicos>Ler a lista da tela agora</button>' +
+      '</fieldset>' +
+      '<fieldset><legend>Regras' + (usandoPadrao ? ' (usando as que vêm com o script)' : ' (personalizadas)') + '</legend>' +
+      '<textarea data-regras style="min-height:220px;font-family:ui-monospace,Menlo,monospace;font-size:12px">' +
+      esc(NV.classificar.regrasParaTexto(regras)) +
+      '</textarea>' +
+      '<div class="linha">' +
+      '<button class="acao secundaria" data-restaurar-regras>Voltar às regras padrão</button>' +
+      '<button class="acao secundaria" data-conferir-regras>Conferir contra a lista</button>' +
+      '</div>' +
+      '</fieldset>' +
+      '<fieldset><legend>Testar</legend>' +
+      '<label class="campo">Descrição de exemplo' +
+      '<input type="text" data-teste placeholder="computador da enfermagem nao esta ligando"></label>' +
+      '<button class="acao secundaria" data-testar>Classificar</button>' +
+      '<div data-resultado-teste class="aviso-inline"></div>' +
+      '</fieldset>' +
+      '<fieldset><legend>Limites</legend>' +
+      '<div class="grade2">' +
+      '<label class="campo">Confiança mínima (0 a 1)' +
+      '<input type="number" step="0.05" min="0" max="1" data-c="classificacao.minimoConfianca" value="' +
+      cfg.classificacao.minimoConfianca + '"></label>' +
+      '<label class="campo">Perguntar quando abaixo de' +
+      '<input type="number" step="0.05" min="0" max="1" data-c="classificacao.confirmarAbaixoDe" value="' +
+      cfg.classificacao.confirmarAbaixoDe + '"></label>' +
+      '</div>' +
+      '<label class="check"><input type="checkbox" data-c="classificacao.reservaDoPreset"' +
+      (cfg.classificacao.reservaDoPreset ? ' checked' : '') +
+      '><span>Usar o serviço do preset quando não houver classificação confiável' +
+      '<small>Desmarcado, o fechamento é abortado em vez de usar a reserva.</small></span></label>' +
+      '<p class="aviso-inline">Uma regra que casa vale 95%. Com "perguntar quando abaixo de" em 0,9, ' +
+      'toda decisão por semelhança passa por você antes de ser usada.</p>' +
+      '</fieldset>'
+    );
+  }
+
   function htmlAbaSeletores(cfg) {
     return (
       '<div class="aviso">Use isto quando o script não achar um botão ou campo: clique em "Aprender" e depois no elemento real na tela do Neovero.</div>' +
@@ -3405,6 +4207,7 @@
     const cfg = NV.config.obter();
     const abas = [
       ['presets', 'Presets', htmlAbaPresets],
+      ['classificacao', 'Classificação', htmlAbaClassificacao],
       ['comportamento', 'Comportamento', htmlAbaComportamento],
       ['seletores', 'Seletores', htmlAbaSeletores],
       ['diagnostico', 'Diagnóstico', htmlAbaDiagnostico]
@@ -3449,7 +4252,8 @@
       if (seletor) seletor.value = preset.id;
       conteudo.querySelectorAll('[data-f]').forEach(function (campo) {
         const valor = valorPorCaminho(preset, campo.dataset.f);
-        campo.value = valor == null ? '' : valor;
+        if (campo.type === 'checkbox') campo.checked = !!valor;
+        else campo.value = valor == null ? '' : valor;
       });
     }
 
@@ -3458,8 +4262,10 @@
       const preset = NV.config.clonar(base);
       conteudo.querySelectorAll('[data-f]').forEach(function (campo) {
         const caminho = campo.dataset.f;
-        let valor = campo.value;
-        if (campo.type === 'number') valor = Number(valor);
+        let valor;
+        if (campo.type === 'checkbox') valor = campo.checked;
+        else if (campo.type === 'number') valor = Number(campo.value);
+        else valor = campo.value;
         definirPorCaminho(preset, caminho, valor);
       });
       return preset;
@@ -3505,6 +4311,22 @@
         NV.config.aplicar(coletarComportamento());
         NV.log.console = NV.config.obter().logNoConsole;
         status('Configuração salva', 'ok');
+        return true;
+      }
+      if (abaAtual === 'classificacao') {
+        const area = conteudo.querySelector('[data-regras]');
+        const analise = NV.classificar.textoParaRegras(area ? area.value : '');
+        if (analise.erros.length) {
+          status('✗ ' + analise.erros[0], 'erro');
+          return false;
+        }
+        const mudancas = coletarComportamento();
+        /* Regras iguais às padrão continuam "padrão", para receberem melhorias futuras. */
+        const iguaisAoPadrao =
+          NV.classificar.regrasParaTexto(analise.regras) === NV.classificar.regrasParaTexto(NV.classificar.REGRAS_PADRAO);
+        definirPorCaminho(mudancas, 'classificacao.regras', iguaisAoPadrao ? [] : analise.regras);
+        NV.config.aplicar(mudancas);
+        status('Classificação salva (' + analise.regras.length + ' regras)', 'ok');
         return true;
       }
       if (abaAtual === 'diagnostico') {
@@ -3570,6 +4392,76 @@
         presetEmEdicao = (NV.config.presetAtivo() || {}).id;
         renderAba('presets');
         preencherPresets();
+        return;
+      }
+      if (alvo.dataset && alvo.dataset.lerServicos !== undefined) {
+        status('… lendo a lista de serviços da tela', 'trabalhando');
+        try {
+          const janela = NV.localizar.janelaOs();
+          let modal = NV.localizar.modalOcorrencia();
+          const precisaAbrir = !modal;
+          if (precisaAbrir) {
+            modal = await NV.fluxo.abrirModalOcorrencia(janela, NV.config.obter().tempos);
+          }
+          const lista = await NV.fluxo.opcoesDeServico(modal, { forcarLeitura: true });
+          if (precisaAbrir) {
+            const cancelar = NV.dom.acharBotao(modal, NV.config.obter().rotulos.cancelarModal, { min: 0.98 });
+            if (cancelar) NV.dom.clicar(cancelar);
+          }
+          status('✓ ' + lista.opcoes.length + ' serviços lidos da tela', 'ok');
+          renderAba('classificacao');
+        } catch (erro) {
+          status('✗ ' + String(erro.message || erro) + ' (abra um chamado antes)', 'erro');
+        }
+        return;
+      }
+      if (alvo.dataset && alvo.dataset.restaurarRegras !== undefined) {
+        conteudo.querySelector('[data-regras]').value = NV.classificar.regrasParaTexto(NV.classificar.REGRAS_PADRAO);
+        status('Regras padrão carregadas no editor (salve para aplicar)');
+        return;
+      }
+      if (alvo.dataset && alvo.dataset.conferirRegras !== undefined) {
+        const analise = NV.classificar.textoParaRegras(conteudo.querySelector('[data-regras]').value);
+        const destino = conteudo.querySelector('[data-resultado-teste]');
+        if (analise.erros.length) {
+          destino.innerHTML = '<span style="color:#f87171">' + esc(analise.erros.join(' ')) + '</span>';
+          return;
+        }
+        const invalidas = NV.classificar.conferirRegras(analise.regras, NV.config.servicosEmCache());
+        destino.innerHTML = invalidas.length
+          ? '<span style="color:#fbbf24">' + invalidas.length + ' regra(s) apontam para serviço inexistente:</span><br>' +
+            invalidas
+              .map(function (i) {
+                return '· <code>' + esc(i.servico) + '</code>' + (i.sugestao ? ' → talvez <code>' + esc(i.sugestao) + '</code>' : '');
+              })
+              .join('<br>')
+          : '<span style="color:#34d399">Todas as ' + analise.regras.length + ' regras apontam para serviços existentes.</span>';
+        return;
+      }
+      if (alvo.dataset && alvo.dataset.testar !== undefined) {
+        const descricao = conteudo.querySelector('[data-teste]').value;
+        const analise = NV.classificar.textoParaRegras(conteudo.querySelector('[data-regras]').value);
+        const sugestao = NV.classificar.sugerir(descricao, NV.config.servicosEmCache(), {
+          regras: analise.regras.length ? analise.regras : NV.classificar.REGRAS_PADRAO,
+          minimo: Number(conteudo.querySelector('[data-c="classificacao.minimoConfianca"]').value)
+        });
+        const destino = conteudo.querySelector('[data-resultado-teste]');
+        destino.innerHTML = sugestao.escolhido
+          ? '<span style="color:#34d399">→ <b>' + esc(sugestao.escolhido) + '</b></span> · ' +
+            Math.round(sugestao.confianca * 100) + '% · ' + esc(sugestao.origem) +
+            (sugestao.regra ? ' (regra “' + esc(sugestao.regra.chave) + '”)' : '') +
+            (sugestao.alternativas.length > 1
+              ? '<br>alternativas: ' +
+                esc(
+                  sugestao.alternativas
+                    .slice(1, 4)
+                    .map(function (a) {
+                      return a.opcao + ' (' + Math.round(a.score * 100) + '%)';
+                    })
+                    .join(' · ')
+                )
+              : '')
+          : '<span style="color:#f87171">Sem classificação.</span> ' + esc((sugestao.avisos || []).join(' '));
         return;
       }
       if (alvo.dataset && alvo.dataset.aprender) {

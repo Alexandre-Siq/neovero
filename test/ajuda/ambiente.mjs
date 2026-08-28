@@ -72,6 +72,7 @@ export async function carregarModulos() {
   await import('../../src/util/dom.js');
   await import('../../src/core/log.js');
   await import('../../src/core/config.js');
+  await import('../../src/core/classificar.js');
   await import('../../src/core/localizar.js');
   await import('../../src/core/campos.js');
   await import('../../src/core/fluxo.js');

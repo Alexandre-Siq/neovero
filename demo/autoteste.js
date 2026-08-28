@@ -39,8 +39,10 @@
     NV().config.aplicar(
       Object.assign(
         {
+          presetAtivo: 'ti-configuracao',
           tempos: { elemento: 2500, modal: 2500, salvar: 2500, fechar: 2500, intervalo: 40 },
-          lote: { esperaEntreOs: 200 }
+          lote: { esperaEntreOs: 200 },
+          cacheServicos: { valores: [], atualizadoEm: null }
         },
         extra || {}
       )
@@ -244,6 +246,45 @@
     modal.remove();
 
     return 'seguiu até o fim e listou o campo problemático';
+  });
+
+  teste('Classifica o serviço pela descrição do chamado', async function () {
+    configurarPadrao();
+    NV().config.definirPresetAtivo('ti-automatico');
+    const app = window.AppFalso.montar({
+      numero: '202602691',
+      descricao: 'computador da enfermagem nao esta ligando'
+    });
+
+    const resultado = await NV().fluxo.fecharOS({ agora: new Date(2026, 7, 28, 9, 19) });
+    afirmar(resultado.ok, 'fluxo falhou: ' + resultado.erro + ' (passo: ' + resultado.passo + ')');
+    igual(app.estado.ocorrencias[0].servico, 'LIGAR EQUIPAMENTO', 'serviço escolhido pela descrição');
+    igual(app.estado.ocorrencias[0].inicio, '28/08/2026, 09:18', 'início');
+    igual(app.estado.ocorrencias[0].fim, '28/08/2026, 09:19', 'fim');
+
+    const passo = resultado.passos.filter(function (p) {
+      return /Classificar serviço/.test(p.passo);
+    })[0];
+    afirmar(passo, 'deveria existir o passo de classificação');
+    igual(passo.resultado.origem, 'regra', 'origem da decisão');
+
+    configurarPadrao();
+    return 'descrição “nao esta ligando” → LIGAR EQUIPAMENTO (por regra)';
+  });
+
+  teste('Data da Ocorrência fica exatamente 1 minuto antes da Data Final', async function () {
+    configurarPadrao();
+    const app = window.AppFalso.montar({ numero: '202602691' });
+
+    await NV().fluxo.fecharOS({ agora: new Date(2026, 7, 28, 15, 30, 45) });
+    const o = app.estado.ocorrencias[0];
+    igual(o.inicio, '28/08/2026, 15:29', 'Data da Ocorrência');
+    igual(o.fim, '28/08/2026, 15:30', 'Data Final do Serviço');
+
+    const diferenca = NV().dates.parse(o.fim).getTime() - NV().dates.parse(o.inicio).getTime();
+    igual(diferenca, 60000, 'diferença em milissegundos');
+
+    return 'sempre 60s de diferença, mesmo com duração configurada em 0';
   });
 
   teste('Funciona com a OS dentro de um iframe (janelas MDI do ASP.NET)', async function () {

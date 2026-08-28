@@ -9,10 +9,22 @@
 
   const PRESETS_PADRAO = [
     {
-      id: 'ti-configuracao',
-      nome: 'TI — Configuração de equipamentos',
+      id: 'ti-automatico',
+      nome: 'TI — Serviço pela descrição (automático)',
       ocorrencia: 'SUPORTE - TI',
       servico: 'CONFIGURAÇÃO DE EQUIPAMENTOS',
+      servicoAutomatico: true,
+      causa: '',
+      local: 'interno',
+      observacao: '',
+      datas: { modo: 'agora', duracaoMin: 1 }
+    },
+    {
+      id: 'ti-configuracao',
+      nome: 'TI — Configuração de equipamentos (fixo)',
+      ocorrencia: 'SUPORTE - TI',
+      servico: 'CONFIGURAÇÃO DE EQUIPAMENTOS',
+      servicoAutomatico: false,
       causa: '',
       local: 'interno',
       observacao: '',
@@ -20,9 +32,10 @@
     },
     {
       id: 'ti-suporte-remoto',
-      nome: 'TI — Suporte remoto',
+      nome: 'TI — Suporte remoto (fixo)',
       ocorrencia: 'SUPORTE - TI',
-      servico: '',
+      servico: 'CONFIGURAÇÃO DE SOFTWARE',
+      servicoAutomatico: false,
       causa: '',
       local: 'interno',
       observacao: 'Atendimento remoto realizado.',
@@ -40,8 +53,16 @@
     fecharOsAposOcorrencia: true,
     fecharCalendarioComEsc: true,
     logNoConsole: false,
-    presetAtivo: 'ti-configuracao',
+    presetAtivo: 'ti-automatico',
     presets: PRESETS_PADRAO,
+    classificacao: {
+      minimoConfianca: 0.5,
+      confirmarAbaixoDe: 0.9,
+      reservaDoPreset: true,
+      regras: []
+    },
+    /* Lista de serviços lida da tela, para não reabrir o combo a cada fechamento. */
+    cacheServicos: { valores: [], atualizadoEm: null },
     atalhos: {
       fechar: 'Alt+F',
       lote: 'Alt+Shift+F',
@@ -214,12 +235,34 @@
       const erros = [];
       if (!preset || !String(preset.nome || '').trim()) erros.push('Informe um nome para o preset.');
       if (!preset || !String(preset.ocorrencia || '').trim()) erros.push('O campo "Ocorrência" é obrigatório.');
-      if (!preset || !String(preset.servico || '').trim()) erros.push('O campo "Serviço" é obrigatório.');
+      if (!preset || (!String(preset.servico || '').trim() && !preset.servicoAutomatico)) {
+        erros.push('Informe o "Serviço" ou marque a escolha automática pela descrição.');
+      }
       const modo = preset && preset.datas && preset.datas.modo;
       if (modo && ['agora', 'inicioAgora', 'abertura'].indexOf(modo) < 0) erros.push('Modo de data inválido: ' + modo);
-      const duracao = preset && preset.datas ? Number(preset.datas.duracaoMin) : 0;
-      if (Number.isNaN(duracao) || duracao < 0 || duracao > 24 * 60) erros.push('Duração deve estar entre 0 e 1440 minutos.');
+      const duracao = preset && preset.datas ? Number(preset.datas.duracaoMin) : 1;
+      if (Number.isNaN(duracao) || duracao < 1 || duracao > 24 * 60) {
+        erros.push('Duração deve estar entre 1 e 1440 minutos (mínimo de 1 min entre as datas).');
+      }
       return erros;
+    },
+
+    /* Regras vazias = usar as regras que vêm com o script. */
+    regrasDeClassificacao: function () {
+      const cfg = config.obter();
+      const regras = (cfg.classificacao && cfg.classificacao.regras) || [];
+      return regras.length ? regras : NV.classificar.REGRAS_PADRAO;
+    },
+
+    servicosEmCache: function () {
+      const cfg = config.obter();
+      return (cfg.cacheServicos && cfg.cacheServicos.valores) || [];
+    },
+
+    definirCacheServicos: function (valores) {
+      return config.aplicar({
+        cacheServicos: { valores: valores || [], atualizadoEm: new Date().toISOString() }
+      });
     },
 
     gerarId: function (nome) {

@@ -11,7 +11,10 @@ const NV = await carregarModulos();
 
 function configurarPadrao() {
   NV.config.restaurarPadrao();
-  NV.config.aplicar({ tempos: { elemento: 800, modal: 800, salvar: 800, fechar: 800, intervalo: 15 } });
+  NV.config.aplicar({
+    presetAtivo: 'ti-configuracao',
+    tempos: { elemento: 800, modal: 800, salvar: 800, fechar: 800, intervalo: 15 }
+  });
 }
 
 test('a busca de elementos atravessa iframes de mesma origem', () => {

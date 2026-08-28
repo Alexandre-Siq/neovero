@@ -42,11 +42,12 @@ eles rodam contra uma réplica da tela.
 1. Baixe [`dist/autoteste.html`](dist/autoteste.html) — no GitHub, abra o arquivo e use o botão
    *Download raw file*.
 2. Abra o arquivo baixado no Chrome/Edge (duplo clique).
-3. Ele executa 8 verificações sozinho: painel injetado, simulação preenchendo os quatro campos,
+3. Ele executa 12 verificações sozinho: painel injetado, simulação preenchendo os campos,
    fechamento completo, campos opcionais, aborto quando o serviço do preset não existe, calibração
-   de seletor, modo lote e funcionamento dentro de `iframe`.
+   de seletor, modo lote, "Conferir tela", classificação pela descrição, intervalo de 1 minuto
+   entre as datas e funcionamento dentro de `iframe`.
 
-**8/8 verde** = pode instalar. Se alguma falhar, clique em **Copiar relatório** e me mande o texto:
+**12/12 verde** = pode instalar. Se alguma falhar, clique em **Copiar relatório** e me mande o texto:
 ele diz exatamente qual passo falhou e por quê.
 
 ### 2. Demonstração manual
@@ -147,6 +148,52 @@ ocorrência pode ter sido lançada sem a OS ser fechada, e aí basta fechar à m
 O modo **Lote** vem desligado. Só faz sentido depois que o passo 3 estiver saindo redondo várias
 vezes seguidas, porque ele repete o mesmo preset em vários chamados.
 
+## Classificação automática do serviço
+
+Em vez de um serviço fixo por preset, o script pode escolher o **Serviço** a partir da
+**descrição da requisição** que está na tela da OS.
+
+Duas camadas, nesta ordem:
+
+1. **Regras de palavra-chave** (previsíveis e editáveis em ⚙ → Classificação):
+
+```
+nao liga, nao esta ligando, sem energia => LIGAR EQUIPAMENTO
+toner, tonner, cilindro => SUBSTITUIÇÃO DE TONNER/CILINDRO
+sem internet, sem rede, nao conecta na rede => EQUIPAMENTO SEM ACESSO A REDE/INTERNET
+```
+
+Vence a palavra-chave mais longa que aparecer no texto. Palavra curta exige casamento exato
+(`ris` não casa com "risco"), palavra média aceita plural (`toner` pega "toners") e palavra longa
+aceita qualquer terminação (`travado` pega "travados").
+
+2. **Semelhança por palavras**, quando nenhuma regra casa. Compara o texto do chamado com o nome de
+cada serviço usando radicais ("ligando" ≈ "ligar", "configuração" ≈ "configurar").
+
+### Como ele decide se pode agir sozinho
+
+| Confiança | O que acontece |
+| --- | --- |
+| Regra casou (95%) | usa direto |
+| Entre o mínimo e o limite de confirmação | **pergunta**, mostrando as alternativas ranqueadas |
+| Abaixo do mínimo | usa o serviço do preset como reserva (ou aborta, se você desligar a reserva) |
+
+Os limites ficam em ⚙ → Classificação. Com o padrão (mínimo 0,5 e confirmar abaixo de 0,9), toda
+decisão tomada por semelhança passa por você antes de ser usada.
+
+A lista de serviços vem da própria tela (o script lê o combo uma vez e guarda em cache). Isso
+garante que ele só escolhe opções que existem de fato, e a aba de classificação avisa quando uma
+regra aponta para um serviço que não está mais na lista.
+
+Para ver o que ele faria sem fechar nada: **Conferir tela** mostra a descrição lida, o serviço
+classificado, a confiança e as alternativas.
+
+## Datas da ocorrência
+
+O padrão reproduz o que era feito à mão: **fim = agora** e **início = 1 minuto antes**. Esse
+intervalo de 1 minuto é garantido em todas as regras de data — nunca saem iguais, porque o Neovero
+recusa ocorrência com início igual ou posterior ao fim.
+
 ## Presets
 
 Um preset é a resposta para "que ocorrência e que serviço eu lanço nesse tipo de chamado":
@@ -154,13 +201,13 @@ Um preset é a resposta para "que ocorrência e que serviço eu lanço nesse tip
 | Campo | Exemplo |
 | --- | --- |
 | Ocorrência (obrigatório) | `SUPORTE - TI` |
-| Serviço (obrigatório) | `CONFIGURAÇÃO DE EQUIPAMENTOS` |
+| Serviço | `CONFIGURAÇÃO DE EQUIPAMENTOS` (fixo) ou automático pela descrição |
 | Causa (opcional) | `ERRO DE CONFIGURAÇÃO` |
 | Interno/Externo | `Interno` |
 | Observação (opcional) | `Atendimento remoto realizado.` |
 | Regra de datas | `Terminou agora` + duração `1 min` |
 
-Regras de data disponíveis:
+Regras de data disponíveis (todas garantem no mínimo 1 minuto entre início e fim):
 
 - **Terminou agora** — fim = agora, início = agora − duração. É o que você faz hoje (ocorrência de 1 minuto).
 - **Começa agora** — início = agora, fim = agora + duração. Para quando você vai atender na sequência.
@@ -192,7 +239,7 @@ por navegador (e pode ser exportado para os colegas).
 
 ## O que eu preciso de você
 
-O código já está pronto e testado contra uma réplica da tela (49 testes automatizados,
+O código já está pronto e testado contra uma réplica da tela (91 testes automatizados,
 incluindo o fluxo completo de ponta a ponta, com e sem `iframe`). O endereço já está resolvido
 (`ishaoc.neovero.com`). O que falta é ajustar aos detalhes do HTML real. Em ordem de prioridade:
 
@@ -236,7 +283,7 @@ confirmação de que o fornecedor não proíbe isso em contrato.
 
 ```bash
 npm install       # só jsdom, usado nos testes
-npm test          # 49 testes: texto, datas, espera, config, build e fluxo completo em jsdom
+npm test          # 91 testes: texto, datas, espera, config, build e fluxo completo em jsdom
 npm run build     # gera dist/ (userscript, extensão, autoteste.html e demo-autonomo.html)
 ```
 
@@ -245,7 +292,7 @@ Estrutura:
 ```
 src/util/     text (comparação tolerante a acento/caixa), dates (formato pt-BR), async (espera com timeout), dom
 src/core/     config (presets), localizar (elemento lógico → DOM), campos (preencher e verificar),
-              fluxo (orquestração), lote, diagnostico, log
+              classificar (descrição → serviço), fluxo (orquestração), lote, diagnostico, log
 src/ui/       painel, estilos, aprender (captura de seletor por clique)
 demo/         app-falso.js (réplica da tela), autoteste.js (verificações no navegador), roteiro.js
 test/         mesma réplica rodando em jsdom, mais os testes de lógica pura

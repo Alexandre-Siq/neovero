@@ -82,7 +82,8 @@
             preset: NV.config.presetAtivo(),
             aoProgresso: aoProgresso,
             sinal: sinalAtual,
-            aoConfirmar: confirmarFechamento
+            aoConfirmar: confirmarFechamento,
+            aoEscolherServico: escolherServico
           },
           opcoes || {}
         )
@@ -144,6 +145,52 @@
       sobre.querySelector('[data-nao]').addEventListener('click', () => fechar(false));
       sobre.addEventListener('click', function (ev) {
         if (ev.target === sobre) fechar(false);
+      });
+    });
+  }
+
+  /* Confiança intermediária: o usuário escolhe entre as alternativas ranqueadas. */
+  function escolherServico(info) {
+    return new Promise(function (resolve) {
+      const alternativas = (info.sugestao.alternativas || []).slice(0, 6);
+      const html =
+        '<p style="margin:0 0 10px">Descrição do chamado:</p>' +
+        '<p style="margin:0 0 12px"><code>' + esc(NV.text.truncate(info.descricao, 220)) + '</code></p>' +
+        '<div class="aviso">Sugestão: <b>' + esc(info.sugestao.escolhido) + '</b> · confiança ' +
+        Math.round((info.sugestao.confianca || 0) * 100) + '%' +
+        (info.sugestao.regra ? ' (regra “' + esc(info.sugestao.regra.chave) + '”)' : ' (semelhança)') +
+        '</div>' +
+        '<ul class="lista" style="max-height:260px">' +
+        alternativas
+          .map(function (a) {
+            return (
+              '<li><span class="nome">' + esc(a.opcao) + '</span>' +
+              '<span class="badge">' + Math.round(a.score * 100) + '%</span>' +
+              '<button class="acao" data-opcao="' + esc(a.opcao) + '">Usar</button></li>'
+            );
+          })
+          .join('') +
+        '</ul>';
+
+      const sobre = abrirSobreposicao(
+        'Qual serviço usar?',
+        html,
+        '<button class="acao secundaria" data-cancelar>Cancelar fechamento</button>' +
+          (info.preset.servico ? '<button class="acao secundaria" data-preset>Usar o do preset</button>' : '') +
+          '<button class="acao" data-sugerido>Usar a sugestão</button>'
+      );
+
+      const responder = function (valor) {
+        sobre.remove();
+        resolve(valor);
+      };
+      sobre.addEventListener('click', function (ev) {
+        const alvo = ev.target;
+        if (alvo.dataset && alvo.dataset.opcao) responder(alvo.dataset.opcao);
+        else if (alvo.dataset && alvo.dataset.sugerido !== undefined) responder(info.sugestao.escolhido);
+        else if (alvo.dataset && alvo.dataset.preset !== undefined) responder(info.preset.servico);
+        else if (alvo.dataset && alvo.dataset.cancelar !== undefined) responder(null);
+        else if (alvo === sobre) responder(null);
       });
     });
   }
@@ -224,7 +271,29 @@
       '<p class="aviso-inline">OS em foco: <b>' + esc(relatorio.numeroOs || 'não identificada') + '</b> · ' +
       'abertura: ' + esc(relatorio.aberturaOs || 'não lida') + ' · ' +
       'documentos na página: ' + relatorio.documentos + (relatorio.documentos > 1 ? ' (usa iframe)' : '') + '</p>' +
+      '<p class="aviso-inline">Descrição lida: ' +
+      (relatorio.descricao ? '<code>' + esc(NV.text.truncate(relatorio.descricao, 200)) + '</code>' : '<b>não lida</b>') +
+      '</p>' +
       '</fieldset>' +
+      (relatorio.classificacao
+        ? '<fieldset><legend>Classificação do serviço</legend>' +
+          (relatorio.classificacao.escolhido
+            ? '<p class="aviso-inline">→ <b>' + esc(relatorio.classificacao.escolhido) + '</b> · ' +
+              Math.round(relatorio.classificacao.confianca * 100) + '% · ' + esc(relatorio.classificacao.origem) +
+              (relatorio.classificacao.regra ? ' (regra “' + esc(relatorio.classificacao.regra.chave) + '”)' : '') + '</p>'
+            : '<p class="aviso-inline" style="color:#f87171">Nenhum serviço classificado para esta descrição.</p>') +
+          ((relatorio.classificacao.alternativas || []).length
+            ? '<p class="aviso-inline">Alternativas: ' +
+              esc(
+                relatorio.classificacao.alternativas
+                  .map(function (a) {
+                    return a.opcao + ' (' + Math.round(a.score * 100) + '%)';
+                  })
+                  .join(' · ')
+              ) + '</p>'
+            : '') +
+          '</fieldset>'
+        : '') +
       '<fieldset><legend>Elementos</legend><ul class="lista" style="max-height:none">' +
       (relatorio.elementos || []).map(linhaElemento).join('') +
       '</ul></fieldset>' +
@@ -356,6 +425,7 @@
   /* ---------------- configuração ---------------- */
 
   const CHAVES_SELETOR = [
+    ['descricaoRequisicao', 'Descrição da requisição (texto do chamado)'],
     ['botaoOcorrencia', 'Botão "Ocorrência" (na OS)'],
     ['botaoFecharOs', 'Botão "Fechar OS"'],
     ['botaoIniciarAtendimento', 'Botão "Iniciar Atendimento"'],
@@ -386,6 +456,10 @@
       '<label class="campo">Interno/Externo<select data-f="local"><option value="interno">Interno</option><option value="externo">Externo</option><option value="">Não alterar</option></select></label>' +
       '</div>' +
       '<label class="campo">Observação (opcional)<textarea data-f="observacao"></textarea></label>' +
+      '<label class="check"><input type="checkbox" data-f="servicoAutomatico">' +
+      '<span>Escolher o serviço pela descrição do chamado' +
+      '<small>Usa as regras de ⚙ → Classificação. O campo "Serviço" acima passa a ser a reserva ' +
+      'para quando não houver classificação confiável.</small></span></label>' +
       '</fieldset>' +
       '<fieldset><legend>Datas</legend>' +
       '<div class="grade2">' +
@@ -455,6 +529,56 @@
     );
   }
 
+  function htmlAbaClassificacao(cfg) {
+    const regras = NV.config.regrasDeClassificacao();
+    const cache = cfg.cacheServicos || {};
+    const usandoPadrao = !(cfg.classificacao.regras || []).length;
+    return (
+      '<div class="aviso">As regras decidem o <b>Serviço</b> a partir da descrição do chamado. ' +
+      'Formato: <code>palavra, outra palavra =&gt; NOME DO SERVIÇO</code>, uma por linha. ' +
+      'Vence a palavra-chave mais longa que aparecer no texto; se nenhuma casar, entra a semelhança por palavras.</div>' +
+      '<fieldset><legend>Lista de serviços da produção</legend>' +
+      '<p class="aviso-inline">' +
+      (cache.valores && cache.valores.length
+        ? cache.valores.length + ' serviços em cache (lidos em ' + esc(String(cache.atualizadoEm || '').slice(0, 16).replace('T', ' ')) + ').'
+        : 'Nenhuma lista lida ainda — use "Conferir tela" com um chamado aberto, ou o botão abaixo.') +
+      '</p>' +
+      '<button class="acao secundaria" data-ler-servicos>Ler a lista da tela agora</button>' +
+      '</fieldset>' +
+      '<fieldset><legend>Regras' + (usandoPadrao ? ' (usando as que vêm com o script)' : ' (personalizadas)') + '</legend>' +
+      '<textarea data-regras style="min-height:220px;font-family:ui-monospace,Menlo,monospace;font-size:12px">' +
+      esc(NV.classificar.regrasParaTexto(regras)) +
+      '</textarea>' +
+      '<div class="linha">' +
+      '<button class="acao secundaria" data-restaurar-regras>Voltar às regras padrão</button>' +
+      '<button class="acao secundaria" data-conferir-regras>Conferir contra a lista</button>' +
+      '</div>' +
+      '</fieldset>' +
+      '<fieldset><legend>Testar</legend>' +
+      '<label class="campo">Descrição de exemplo' +
+      '<input type="text" data-teste placeholder="computador da enfermagem nao esta ligando"></label>' +
+      '<button class="acao secundaria" data-testar>Classificar</button>' +
+      '<div data-resultado-teste class="aviso-inline"></div>' +
+      '</fieldset>' +
+      '<fieldset><legend>Limites</legend>' +
+      '<div class="grade2">' +
+      '<label class="campo">Confiança mínima (0 a 1)' +
+      '<input type="number" step="0.05" min="0" max="1" data-c="classificacao.minimoConfianca" value="' +
+      cfg.classificacao.minimoConfianca + '"></label>' +
+      '<label class="campo">Perguntar quando abaixo de' +
+      '<input type="number" step="0.05" min="0" max="1" data-c="classificacao.confirmarAbaixoDe" value="' +
+      cfg.classificacao.confirmarAbaixoDe + '"></label>' +
+      '</div>' +
+      '<label class="check"><input type="checkbox" data-c="classificacao.reservaDoPreset"' +
+      (cfg.classificacao.reservaDoPreset ? ' checked' : '') +
+      '><span>Usar o serviço do preset quando não houver classificação confiável' +
+      '<small>Desmarcado, o fechamento é abortado em vez de usar a reserva.</small></span></label>' +
+      '<p class="aviso-inline">Uma regra que casa vale 95%. Com "perguntar quando abaixo de" em 0,9, ' +
+      'toda decisão por semelhança passa por você antes de ser usada.</p>' +
+      '</fieldset>'
+    );
+  }
+
   function htmlAbaSeletores(cfg) {
     return (
       '<div class="aviso">Use isto quando o script não achar um botão ou campo: clique em "Aprender" e depois no elemento real na tela do Neovero.</div>' +
@@ -506,6 +630,7 @@
     const cfg = NV.config.obter();
     const abas = [
       ['presets', 'Presets', htmlAbaPresets],
+      ['classificacao', 'Classificação', htmlAbaClassificacao],
       ['comportamento', 'Comportamento', htmlAbaComportamento],
       ['seletores', 'Seletores', htmlAbaSeletores],
       ['diagnostico', 'Diagnóstico', htmlAbaDiagnostico]
@@ -550,7 +675,8 @@
       if (seletor) seletor.value = preset.id;
       conteudo.querySelectorAll('[data-f]').forEach(function (campo) {
         const valor = valorPorCaminho(preset, campo.dataset.f);
-        campo.value = valor == null ? '' : valor;
+        if (campo.type === 'checkbox') campo.checked = !!valor;
+        else campo.value = valor == null ? '' : valor;
       });
     }
 
@@ -559,8 +685,10 @@
       const preset = NV.config.clonar(base);
       conteudo.querySelectorAll('[data-f]').forEach(function (campo) {
         const caminho = campo.dataset.f;
-        let valor = campo.value;
-        if (campo.type === 'number') valor = Number(valor);
+        let valor;
+        if (campo.type === 'checkbox') valor = campo.checked;
+        else if (campo.type === 'number') valor = Number(campo.value);
+        else valor = campo.value;
         definirPorCaminho(preset, caminho, valor);
       });
       return preset;
@@ -606,6 +734,22 @@
         NV.config.aplicar(coletarComportamento());
         NV.log.console = NV.config.obter().logNoConsole;
         status('Configuração salva', 'ok');
+        return true;
+      }
+      if (abaAtual === 'classificacao') {
+        const area = conteudo.querySelector('[data-regras]');
+        const analise = NV.classificar.textoParaRegras(area ? area.value : '');
+        if (analise.erros.length) {
+          status('✗ ' + analise.erros[0], 'erro');
+          return false;
+        }
+        const mudancas = coletarComportamento();
+        /* Regras iguais às padrão continuam "padrão", para receberem melhorias futuras. */
+        const iguaisAoPadrao =
+          NV.classificar.regrasParaTexto(analise.regras) === NV.classificar.regrasParaTexto(NV.classificar.REGRAS_PADRAO);
+        definirPorCaminho(mudancas, 'classificacao.regras', iguaisAoPadrao ? [] : analise.regras);
+        NV.config.aplicar(mudancas);
+        status('Classificação salva (' + analise.regras.length + ' regras)', 'ok');
         return true;
       }
       if (abaAtual === 'diagnostico') {
@@ -671,6 +815,76 @@
         presetEmEdicao = (NV.config.presetAtivo() || {}).id;
         renderAba('presets');
         preencherPresets();
+        return;
+      }
+      if (alvo.dataset && alvo.dataset.lerServicos !== undefined) {
+        status('… lendo a lista de serviços da tela', 'trabalhando');
+        try {
+          const janela = NV.localizar.janelaOs();
+          let modal = NV.localizar.modalOcorrencia();
+          const precisaAbrir = !modal;
+          if (precisaAbrir) {
+            modal = await NV.fluxo.abrirModalOcorrencia(janela, NV.config.obter().tempos);
+          }
+          const lista = await NV.fluxo.opcoesDeServico(modal, { forcarLeitura: true });
+          if (precisaAbrir) {
+            const cancelar = NV.dom.acharBotao(modal, NV.config.obter().rotulos.cancelarModal, { min: 0.98 });
+            if (cancelar) NV.dom.clicar(cancelar);
+          }
+          status('✓ ' + lista.opcoes.length + ' serviços lidos da tela', 'ok');
+          renderAba('classificacao');
+        } catch (erro) {
+          status('✗ ' + String(erro.message || erro) + ' (abra um chamado antes)', 'erro');
+        }
+        return;
+      }
+      if (alvo.dataset && alvo.dataset.restaurarRegras !== undefined) {
+        conteudo.querySelector('[data-regras]').value = NV.classificar.regrasParaTexto(NV.classificar.REGRAS_PADRAO);
+        status('Regras padrão carregadas no editor (salve para aplicar)');
+        return;
+      }
+      if (alvo.dataset && alvo.dataset.conferirRegras !== undefined) {
+        const analise = NV.classificar.textoParaRegras(conteudo.querySelector('[data-regras]').value);
+        const destino = conteudo.querySelector('[data-resultado-teste]');
+        if (analise.erros.length) {
+          destino.innerHTML = '<span style="color:#f87171">' + esc(analise.erros.join(' ')) + '</span>';
+          return;
+        }
+        const invalidas = NV.classificar.conferirRegras(analise.regras, NV.config.servicosEmCache());
+        destino.innerHTML = invalidas.length
+          ? '<span style="color:#fbbf24">' + invalidas.length + ' regra(s) apontam para serviço inexistente:</span><br>' +
+            invalidas
+              .map(function (i) {
+                return '· <code>' + esc(i.servico) + '</code>' + (i.sugestao ? ' → talvez <code>' + esc(i.sugestao) + '</code>' : '');
+              })
+              .join('<br>')
+          : '<span style="color:#34d399">Todas as ' + analise.regras.length + ' regras apontam para serviços existentes.</span>';
+        return;
+      }
+      if (alvo.dataset && alvo.dataset.testar !== undefined) {
+        const descricao = conteudo.querySelector('[data-teste]').value;
+        const analise = NV.classificar.textoParaRegras(conteudo.querySelector('[data-regras]').value);
+        const sugestao = NV.classificar.sugerir(descricao, NV.config.servicosEmCache(), {
+          regras: analise.regras.length ? analise.regras : NV.classificar.REGRAS_PADRAO,
+          minimo: Number(conteudo.querySelector('[data-c="classificacao.minimoConfianca"]').value)
+        });
+        const destino = conteudo.querySelector('[data-resultado-teste]');
+        destino.innerHTML = sugestao.escolhido
+          ? '<span style="color:#34d399">→ <b>' + esc(sugestao.escolhido) + '</b></span> · ' +
+            Math.round(sugestao.confianca * 100) + '% · ' + esc(sugestao.origem) +
+            (sugestao.regra ? ' (regra “' + esc(sugestao.regra.chave) + '”)' : '') +
+            (sugestao.alternativas.length > 1
+              ? '<br>alternativas: ' +
+                esc(
+                  sugestao.alternativas
+                    .slice(1, 4)
+                    .map(function (a) {
+                      return a.opcao + ' (' + Math.round(a.score * 100) + '%)';
+                    })
+                    .join(' · ')
+                )
+              : '')
+          : '<span style="color:#f87171">Sem classificação.</span> ' + esc((sugestao.avisos || []).join(' '));
         return;
       }
       if (alvo.dataset && alvo.dataset.aprender) {

@@ -11,7 +11,16 @@
   'use strict';
 
   const OPCOES_OCORRENCIA = ['SUPORTE - TI', 'MANUTENÇÃO PREDIAL', 'HIGIENIZAÇÃO'];
-  const OPCOES_SERVICO = ['CONFIGURAÇÃO DE EQUIPAMENTOS', 'CONFIGURAÇÃO DE REDE', 'TROCA DE PEÇA'];
+  const OPCOES_SERVICO_CURTA = ['CONFIGURAÇÃO DE EQUIPAMENTOS', 'CONFIGURAÇÃO DE SOFTWARE', 'TROCA DE PEÇA'];
+
+  /* Usa a lista real da produção quando o script está carregado, para a réplica
+     ficar fiel (é ela que faz a classificação por descrição valer a pena testar). */
+  function opcoesDeServicoPadrao() {
+    /* No navegador NV vive em window; nos testes em jsdom, no globalThis. */
+    const escopo = (typeof window !== 'undefined' && window.NV) || globalThis.NV || null;
+    const doScript = escopo && escopo.classificar && escopo.classificar.SERVICOS_CONHECIDOS;
+    return doScript && doScript.length ? doScript : OPCOES_SERVICO_CURTA;
+  }
   const LISTA_PADRAO = [
     ['202602693', 'ALOJAMENTO CONJUNTO - 4º ANDAR (48380)'],
     ['202602691', '5º ANDAR - ÁREAS COMUNS (8030)'],
@@ -198,7 +207,7 @@
   /* Modal "Nova Ocorrência": só fecha quando os obrigatórios estão preenchidos. */
   function abrirModal(doc, estado) {
     const comboOcorrencia = combo(doc, 'ocorrencia', OPCOES_OCORRENCIA);
-    const comboServico = combo(doc, 'servico', estado.opcoesServico || OPCOES_SERVICO);
+    const comboServico = combo(doc, 'servico', estado.opcoesServico || opcoesDeServicoPadrao());
     const dataOcorrencia = h(doc, 'input', { type: 'text', 'data-campo': 'dataOcorrencia' });
     const dataFinal = h(doc, 'input', { type: 'text', 'data-campo': 'dataFinal' });
     const radioInterno = h(doc, 'input', { type: 'radio', id: 'interno', name: 'local', checked: 'checked' });
@@ -286,7 +295,8 @@
       ocorrencias: [],
       fechada: false,
       atendimentoIniciado: false,
-      opcoesServico: opts.opcoesServico
+      opcoesServico: opts.opcoesServico,
+      descricao: opts.descricao || 'computador da enfermagem nao esta ligando'
     };
 
     const areaOs = h(doc, 'div', { classe: 'janela janela-os', id: 'janela-os' });
@@ -384,7 +394,18 @@
       areaOs.appendChild(
         h(doc, 'div', { classe: 'requisicao' }, [
           h(doc, 'div', { texto: 'Requisição de Serviço' }),
-          h(doc, 'div', { texto: 'computador da enfermagem nao esta ligando' })
+          h(doc, 'div', { classe: 'celula' }, [
+            h(doc, 'span', { texto: 'Número' }),
+            h(doc, 'span', { texto: '62220' })
+          ]),
+          h(doc, 'div', { classe: 'celula' }, [
+            h(doc, 'span', { texto: 'Requisitante' }),
+            h(doc, 'span', { texto: 'IGNACIO GUEDES RIBEIRO' })
+          ]),
+          h(doc, 'div', { classe: 'celula' }, [
+            h(doc, 'span', { texto: 'Requisição' }),
+            h(doc, 'span', { classe: 'descricao-requisicao', texto: estado.descricao })
+          ])
         ])
       );
       areaOs.appendChild(
@@ -472,5 +493,12 @@
     return app;
   }
 
-  window.AppFalso = { montar: montar, emIframe: emIframe, css: CSS, OPCOES_SERVICO: OPCOES_SERVICO };
+  window.AppFalso = {
+    montar: montar,
+    emIframe: emIframe,
+    css: CSS,
+    OPCOES_OCORRENCIA: OPCOES_OCORRENCIA,
+    OPCOES_SERVICO: OPCOES_SERVICO_CURTA,
+    opcoesDeServicoPadrao: opcoesDeServicoPadrao
+  };
 })();

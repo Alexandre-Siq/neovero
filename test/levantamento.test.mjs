@@ -11,7 +11,10 @@ const NV = await carregarModulos();
 
 function configurarPadrao() {
   NV.config.restaurarPadrao();
-  NV.config.aplicar({ tempos: { elemento: 800, modal: 800, salvar: 800, fechar: 800, intervalo: 15 } });
+  NV.config.aplicar({
+    presetAtivo: 'ti-configuracao',
+    tempos: { elemento: 800, modal: 800, salvar: 800, fechar: 800, intervalo: 15 }
+  });
 }
 
 function item(relatorio, chave) {
@@ -48,7 +51,9 @@ test('lista as opções reais de cada combo', async () => {
   const rel = await NV.fluxo.levantamento({});
 
   assert.deepEqual(rel.opcoes.ocorrencia, ['SUPORTE - TI', 'MANUTENÇÃO PREDIAL', 'HIGIENIZAÇÃO']);
-  assert.deepEqual(rel.opcoes.servico, ['CONFIGURAÇÃO DE EQUIPAMENTOS', 'CONFIGURAÇÃO DE REDE', 'TROCA DE PEÇA']);
+  assert.equal(rel.opcoes.servico.length, NV.classificar.SERVICOS_CONHECIDOS.length);
+  assert.ok(rel.opcoes.servico.includes('CONFIGURAÇÃO DE EQUIPAMENTOS'));
+  assert.ok(rel.opcoes.servico.includes('LIGAR EQUIPAMENTO'));
   assert.ok(rel.opcoes.causa.includes('FALHA DE HARDWARE'), 'combo nativo também deve ser lido');
 });
 

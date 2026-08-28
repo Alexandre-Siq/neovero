@@ -39,7 +39,15 @@
   };
 
   text.tokens = function (value) {
-    return text.normalize(value).split(' ').filter(Boolean);
+    return text
+      .normalize(value)
+      .split(/[^a-z0-9]+/)
+      .filter(Boolean);
+  };
+
+  /* Só letras e números: absorve diferenças de pontuação e espaçamento. */
+  text.somenteAlfanumerico = function (value) {
+    return text.normalize(value).replace(/[^a-z0-9]/g, '');
   };
 
   /* 1 = igual, 0 = sem relação. Usado para escolher a melhor opção de um combo. */
@@ -48,6 +56,10 @@
     const t = text.normalizeLabel(target);
     if (!c || !t) return 0;
     if (c === t) return 1;
+    /* "TONNER/CILINDRO" e "TONNER / CILINDRO" são o mesmo item na prática. */
+    const ca = text.somenteAlfanumerico(c);
+    const ta = text.somenteAlfanumerico(t);
+    if (ca && ca === ta) return 0.98;
     if (c.startsWith(t) || t.startsWith(c)) return 0.9;
     if (c.includes(t)) return 0.8;
     if (t.includes(c)) return 0.7;

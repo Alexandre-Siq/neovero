@@ -14,7 +14,10 @@ await import('../src/ui/painel.js');
 
 test('painel montado não cancela o fluxo com o Esc que o próprio script dispara', async () => {
   NV.config.restaurarPadrao();
-  NV.config.aplicar({ tempos: { elemento: 800, modal: 800, salvar: 800, fechar: 800, intervalo: 15 } });
+  NV.config.aplicar({
+    presetAtivo: 'ti-configuracao',
+    tempos: { elemento: 800, modal: 800, salvar: 800, fechar: 800, intervalo: 15 }
+  });
   const app = montarApp();
   NV.painel.montar();
 

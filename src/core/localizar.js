@@ -103,6 +103,78 @@
     return null;
   };
 
+  /*
+   * Texto da requisição, que é a base para classificar o serviço.
+   * Estratégias: seletor calibrado -> texto após o rótulo "Requisição" ->
+   * maior texto livre dentro da seção "Requisição de Serviço".
+   */
+  localizar.descricaoDaRequisicao = function (janela) {
+    const escopo = janela || localizar.janelaOs();
+
+    const calibrado = NV.config.seletor('descricaoRequisicao');
+    if (calibrado) {
+      const el = dom.porCaminhoCss(calibrado);
+      if (el) {
+        const valor = dom.texto(el);
+        if (valor) return valor;
+      }
+    }
+
+    const irrelevante = function (valor) {
+      if (!valor || valor.length < 8) return true;
+      if (NV.dates.parse(valor)) return true;
+      if (/^\d+$/.test(valor.replace(/\s/g, ''))) return true;
+      return ROTULOS_DA_OS.indexOf(text.normalize(valor)) >= 0;
+    };
+
+    /* Procura primeiro dentro da seção "Requisição de Serviço". */
+    const secao = dom.acharPorTexto(escopo, ['Requisição de Serviço'], { min: 0.95 });
+    if (secao) {
+      let container = secao.parentElement;
+      for (let nivel = 0; nivel < 3 && container; nivel += 1) {
+        const dentro = dom.elementos(container);
+        const achado = textoAposRotulo(dentro, 'Requisição', irrelevante);
+        if (achado) return achado;
+        const livres = dentro
+          .map(function (el) {
+            return dom.textoProprio(el);
+          })
+          .filter(function (valor) {
+            return !irrelevante(valor);
+          })
+          .sort(function (a, b) {
+            return b.length - a.length;
+          });
+        if (livres.length) return livres[0];
+        container = container.parentElement;
+      }
+    }
+
+    /* Sem a seção: varre a janela em ordem de documento. */
+    return textoAposRotulo(dom.elementos(escopo), 'Requisição', irrelevante);
+  };
+
+  /* Rótulos da tela da OS que nunca são a descrição. */
+  const ROTULOS_DA_OS = [
+    'aberta por', 'requisicao', 'requisicao de servico', 'numero', 'requisitante', 'observacoes',
+    'observacao', 'ocorrencias', 'ocorrencia', 'abertura', 'atendimento', 'solucao', 'prazo encerramento',
+    'equipamento', 'localizacao', 'centros de custo', 'disponibilidade', 'oficina', 'tipo', 'prioridade',
+    'complexidade', 'responsavel', 'projeto', 'adicionar', 'monitor de atendimento', 'ordem de servico',
+    'funcionando', 'selecione ...', 'servico', 'produto', 'pendencia', 'checklist', 'servico externo',
+    'labels', 'anexo', 'assinatura', 'causa', 'data da ocorrencia', 'data final do servico'
+  ];
+
+  function textoAposRotulo(elementos, rotulo, irrelevante) {
+    for (let i = 0; i < elementos.length; i += 1) {
+      if (!text.equals(dom.textoProprio(elementos[i]), rotulo)) continue;
+      for (let j = i + 1; j < Math.min(elementos.length, i + 12); j += 1) {
+        const valor = dom.textoProprio(elementos[j]);
+        if (!irrelevante(valor)) return valor;
+      }
+    }
+    return null;
+  }
+
   localizar.botaoOcorrencia = function (janela) {
     const escopo = janela || localizar.janelaOs();
     return resolver('botaoOcorrencia', function () {

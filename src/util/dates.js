@@ -43,17 +43,23 @@
     return d;
   };
 
+  /* O Neovero recusa ocorrência com início igual ou posterior ao fim. */
+  dates.FOLGA_MINIMA_MIN = 1;
+
   /*
    * Calcula início/fim da ocorrência a partir da regra do preset.
    *   agora        -> termina agora, começa `duracaoMin` antes
    *   inicioAgora  -> começa agora, termina `duracaoMin` depois
    *   abertura     -> começa na abertura da OS (quando conhecida), termina agora
+   *
+   * Em qualquer regra é garantido pelo menos 1 minuto entre início e fim.
    */
   dates.resolve = function (regra, contexto) {
     const cfg = regra || {};
     const ctx = contexto || {};
     const modo = cfg.modo || 'agora';
-    const duracao = Math.max(0, Number(cfg.duracaoMin != null ? cfg.duracaoMin : 1));
+    const folga = dates.FOLGA_MINIMA_MIN;
+    const duracao = Math.max(folga, Number(cfg.duracaoMin != null ? cfg.duracaoMin : folga));
     const agora = dates.truncateSeconds(ctx.agora ? new Date(ctx.agora) : new Date());
     let inicio;
     let fim;
@@ -70,7 +76,9 @@
       fim = agora;
     }
 
-    if (inicio.getTime() > fim.getTime()) inicio = fim;
+    if (fim.getTime() - inicio.getTime() < folga * 60000) {
+      inicio = dates.addMinutes(fim, -folga);
+    }
     return { inicio: inicio, fim: fim };
   };
 

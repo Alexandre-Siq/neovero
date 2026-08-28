@@ -16,6 +16,7 @@ const ARQUIVOS = [
   'src/util/dom.js',
   'src/core/log.js',
   'src/core/config.js',
+  'src/core/classificar.js',
   'src/core/localizar.js',
   'src/core/campos.js',
   'src/core/fluxo.js',

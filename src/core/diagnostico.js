@@ -247,6 +247,27 @@
     linhas.push('Documentos na página (1 = sem iframe): ' + (r.documentos != null ? r.documentos : '?'));
     linhas.push('OS em foco: ' + (r.numeroOs || 'não identificada') + ' · abertura: ' + (r.aberturaOs || 'não lida'));
     linhas.push('Modal abriu: ' + (r.modalAberto ? 'sim' : 'não') + (r.modalAberto ? ' · fechou: ' + (r.modalFechado ? 'sim' : 'não') : ''));
+    linhas.push('Descrição lida: ' + (r.descricao ? '“' + r.descricao + '”' : 'NÃO LIDA'));
+    if (r.classificacao) {
+      const c = r.classificacao;
+      linhas.push(
+        'Classificação: ' +
+          (c.escolhido
+            ? c.escolhido + ' (' + Math.round(c.confianca * 100) + '%, ' + c.origem +
+              (c.regra ? ', regra “' + c.regra.chave + '”' : '') + ')'
+            : 'nenhuma')
+      );
+      if ((c.alternativas || []).length) {
+        linhas.push(
+          'Alternativas: ' +
+            c.alternativas
+              .map(function (a) {
+                return a.opcao + ' (' + Math.round(a.score * 100) + '%)';
+              })
+              .join(' · ')
+        );
+      }
+    }
     linhas.push('');
 
     linhas.push('-- Elementos --');

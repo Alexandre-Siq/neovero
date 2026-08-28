@@ -9,6 +9,7 @@ function configurarPadrao(extra) {
   NV.config.aplicar(
     Object.assign(
       {
+        presetAtivo: 'ti-configuracao',
         tempos: { elemento: 800, modal: 800, salvar: 800, fechar: 800, intervalo: 15 },
         lote: { esperaEntreOs: 10 }
       },
@@ -77,7 +78,7 @@ test('preset com observação e causa preenche os campos opcionais', async () =>
     id: 'completo',
     nome: 'Completo',
     ocorrencia: 'SUPORTE - TI',
-    servico: 'CONFIGURAÇÃO DE REDE',
+    servico: 'CONFIGURAÇÃO DE SOFTWARE',
     causa: 'ERRO DE CONFIGURAÇÃO',
     local: 'externo',
     observacao: 'Ponto de rede reconfigurado.',
@@ -89,7 +90,7 @@ test('preset com observação e causa preenche os campos opcionais', async () =>
 
   assert.equal(resultado.ok, true, JSON.stringify(resultado.passos, null, 2));
   const o = app.estado.ocorrencias[0];
-  assert.equal(o.servico, 'CONFIGURAÇÃO DE REDE');
+  assert.equal(o.servico, 'CONFIGURAÇÃO DE SOFTWARE');
   assert.equal(o.causa, 'ERRO DE CONFIGURAÇÃO');
   assert.equal(o.observacao, 'Ponto de rede reconfigurado.');
   assert.equal(o.interno, false, 'deveria ter marcado Externo');

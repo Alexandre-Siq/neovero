@@ -98,6 +98,82 @@
     }, { timeout: tempos.modal, intervalo: tempos.intervalo, rotulo: 'modal "Nova Ocorrência"' });
   };
 
+  /*
+   * Lista de serviços: usa o cache para não abrir o combo em todo fechamento,
+   * e relê da tela quando o cache está vazio ou quando pedimos explicitamente.
+   */
+  fluxo.opcoesDeServico = async function (modal, options) {
+    const opts = options || {};
+    if (!opts.forcarLeitura) {
+      const cache = NV.config.servicosEmCache();
+      if (cache.length) return { opcoes: cache, origem: 'cache' };
+    }
+    const el = localizar.campoServico(modal);
+    if (!el) throw new async.PassoError('Campo "Serviço" não encontrado para ler as opções');
+    const lidas = await campos.listarOpcoes(el, { rotulo: 'Serviço' });
+    if (lidas && lidas.length) NV.config.definirCacheServicos(lidas);
+    return { opcoes: lidas || [], origem: 'tela' };
+  };
+
+  /*
+   * Decide o serviço pela descrição da requisição.
+   * Retorna { servico, sugestao, origem } ou lança quando não há como decidir.
+   */
+  fluxo.escolherServico = async function (modal, preset, contexto, options) {
+    const opts = options || {};
+    const cfg = NV.config.obter();
+    const conf = cfg.classificacao;
+    const descricao = contexto.descricao;
+
+    if (!descricao) {
+      if (conf.reservaDoPreset && preset.servico) {
+        return { servico: preset.servico, origem: 'preset', motivo: 'descrição do chamado não foi lida' };
+      }
+      throw new async.PassoError('Não consegui ler a descrição da requisição para classificar o serviço');
+    }
+
+    const lista = await fluxo.opcoesDeServico(modal, { forcarLeitura: opts.forcarLeitura });
+    const sugestao = NV.classificar.sugerir(descricao, lista.opcoes, {
+      regras: NV.config.regrasDeClassificacao(),
+      minimo: conf.minimoConfianca
+    });
+
+    if (sugestao.escolhido && sugestao.confianca >= conf.confirmarAbaixoDe) {
+      return { servico: sugestao.escolhido, sugestao: sugestao, origem: sugestao.origem };
+    }
+
+    /* Confiança intermediária: quem decide é o usuário, com as alternativas na mão. */
+    if (sugestao.escolhido && opts.aoEscolherServico) {
+      const escolha = await opts.aoEscolherServico({
+        descricao: descricao,
+        sugestao: sugestao,
+        preset: preset,
+        opcoes: lista.opcoes
+      });
+      if (escolha === null) throw new fluxo.Cancelado();
+      if (escolha) return { servico: escolha, sugestao: sugestao, origem: 'usuario' };
+    }
+
+    if (sugestao.escolhido) {
+      return { servico: sugestao.escolhido, sugestao: sugestao, origem: sugestao.origem };
+    }
+
+    if (conf.reservaDoPreset && preset.servico) {
+      return {
+        servico: preset.servico,
+        sugestao: sugestao,
+        origem: 'preset',
+        motivo: 'classificação abaixo do mínimo'
+      };
+    }
+
+    throw new async.PassoError('Não consegui classificar o serviço a partir da descrição', {
+      disponiveis: (sugestao.alternativas || []).map(function (a) {
+        return a.opcao + ' (' + a.score + ')';
+      })
+    });
+  };
+
   fluxo.preencherModal = async function (modal, preset, contexto, passo) {
     const datas = NV.dates.resolve(preset.datas, { agora: contexto.agora, aberturaOS: contexto.aberturaOS });
     /*
@@ -130,8 +206,27 @@
       }, { opcional: true });
     }
 
-    await passo('Selecionar serviço: ' + preset.servico, function () {
-      return campos.definirCombo(localizar.campoServico(modal), preset.servico, { rotulo: 'Serviço' });
+    let servico = preset.servico;
+    if (preset.servicoAutomatico) {
+      const decidido = await passo('Classificar serviço pela descrição', async function () {
+        const escolha = await fluxo.escolherServico(modal, preset, contexto, {
+          aoEscolherServico: contexto.aoEscolherServico
+        });
+        return {
+          descricao: NV.text.truncate(contexto.descricao || '', 120),
+          servico: escolha.servico,
+          origem: escolha.origem,
+          confianca: escolha.sugestao ? escolha.sugestao.confianca : null,
+          regra: escolha.sugestao && escolha.sugestao.regra ? escolha.sugestao.regra.chave : null,
+          alternativas: escolha.sugestao ? escolha.sugestao.alternativas : null,
+          motivo: escolha.motivo || null
+        };
+      }, tolerante);
+      if (decidido && decidido.servico) servico = decidido.servico;
+    }
+
+    await passo('Selecionar serviço: ' + servico, function () {
+      return campos.definirCombo(localizar.campoServico(modal), servico, { rotulo: 'Serviço' });
     }, tolerante);
 
     if (preset.observacao) {
@@ -220,7 +315,14 @@
     relatorio.numeroOs = janelaValida ? localizar.numeroOs(janela) : null;
     const abertura = janelaValida ? localizar.dataAbertura(janela) : null;
     relatorio.aberturaOs = abertura ? NV.dates.format(abertura) : null;
+    relatorio.descricao = janelaValida ? localizar.descricaoDaRequisicao(janela) : null;
     if (janelaValida && !relatorio.numeroOs) relatorio.problemas.push('Não consegui ler o número da OS no título da janela');
+    if (janelaValida && !relatorio.descricao) {
+      relatorio.problemas.push(
+        'Não consegui ler a descrição da requisição (necessária para classificar o serviço). ' +
+          'Use ⚙ → Seletores → Aprender em "Descrição da requisição".'
+      );
+    }
 
     const escopo = janelaValida ? janela : document;
     const botaoOcorrencia = anotar('botaoOcorrencia', 'Botão "Ocorrência"', localizar.botaoOcorrencia(escopo));
@@ -330,6 +432,24 @@
       });
     }
 
+    /* Mostra como a descrição seria classificada, para o usuário ajustar as regras. */
+    if (relatorio.descricao && (relatorio.opcoes.servico || []).length) {
+      relatorio.classificacao = NV.classificar.sugerir(relatorio.descricao, relatorio.opcoes.servico, {
+        regras: NV.config.regrasDeClassificacao(),
+        minimo: cfg.classificacao.minimoConfianca
+      });
+      if (!relatorio.classificacao.escolhido) {
+        relatorio.problemas.push('A descrição não bateu com nenhum serviço: ajuste as regras em ⚙ → Classificação.');
+      }
+      const regrasQuebradas = NV.classificar.conferirRegras(NV.config.regrasDeClassificacao(), relatorio.opcoes.servico);
+      if (regrasQuebradas.length) {
+        relatorio.regrasInvalidas = regrasQuebradas;
+        relatorio.problemas.push(
+          regrasQuebradas.length + ' regra(s) apontam para serviços que não existem na lista (veja o JSON completo).'
+        );
+      }
+    }
+
     /* Fecha o modal sem salvar. */
     try {
       const cancelar = dom.acharBotao(modal, cfg.rotulos.cancelarModal, { min: 0.98 });
@@ -382,7 +502,12 @@
 
       const numero = localizar.numeroOs(janela);
       const aberturaOS = localizar.dataAbertura(janela);
-      NV.log.info('OS em foco', { numero: numero, abertura: aberturaOS ? NV.dates.format(aberturaOS) : null });
+      const descricao = localizar.descricaoDaRequisicao(janela);
+      NV.log.info('OS em foco', {
+        numero: numero,
+        abertura: aberturaOS ? NV.dates.format(aberturaOS) : null,
+        descricao: descricao ? text.truncate(descricao, 120) : null
+      });
 
       /* Simulação não deve mexer em nada: iniciar atendimento altera o estado da OS. */
       if (cfg.autoIniciarAtendimento && !execucaoSeca) {
@@ -402,7 +527,13 @@
       const datas = await fluxo.preencherModal(
         modal,
         preset,
-        { agora: opts.agora, aberturaOS: aberturaOS, tolerante: execucaoSeca },
+        {
+          agora: opts.agora,
+          aberturaOS: aberturaOS,
+          descricao: descricao,
+          aoEscolherServico: opts.aoEscolherServico,
+          tolerante: execucaoSeca
+        },
         passo
       );
 
