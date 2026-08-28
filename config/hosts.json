@@ -1,0 +1,12 @@
+{
+  "comentario": [
+    "Enderecos onde o script deve ser injetado. Ajuste para o endereco do Neovero da sua empresa",
+    "e rode 'npm run build' novamente. Aceita curingas no formato @match do Tampermonkey.",
+    "Se voce nao sabe o endereco, deixe como esta e use a opcao 'Liberar neste site'",
+    "do painel de configuracao (ela grava o host atual na lista de permissoes)."
+  ],
+  "matches": [
+    "*://*.neovero.com/*",
+    "*://neovero.com/*"
+  ]
+}
