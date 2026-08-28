@@ -234,6 +234,69 @@
     };
   };
 
+  /*
+   * Resumo em texto do levantamento, pensado para ser colado numa conversa.
+   * Mais útil que o JSON completo na primeira rodada de ajustes.
+   */
+  diagnostico.resumoTexto = function (relatorio) {
+    const r = relatorio || {};
+    const linhas = [];
+    linhas.push('=== Neovero+ · Conferir tela ===');
+    linhas.push('Versão: ' + (r.versao || '?') + ' · ' + (r.gerado || ''));
+    linhas.push('URL: ' + (r.url || ''));
+    linhas.push('Documentos na página (1 = sem iframe): ' + (r.documentos != null ? r.documentos : '?'));
+    linhas.push('OS em foco: ' + (r.numeroOs || 'não identificada') + ' · abertura: ' + (r.aberturaOs || 'não lida'));
+    linhas.push('Modal abriu: ' + (r.modalAberto ? 'sim' : 'não') + (r.modalAberto ? ' · fechou: ' + (r.modalFechado ? 'sim' : 'não') : ''));
+    linhas.push('');
+
+    linhas.push('-- Elementos --');
+    (r.elementos || []).forEach(function (item) {
+      const marca = item.encontrado ? 'OK   ' : item.opcional ? 'FALTA(opcional)' : 'FALTA';
+      linhas.push(
+        marca + ' | ' + item.rotulo +
+          (item.encontrado ? ' | ' + item.descricao + (item.emFrame ? ' | dentro de iframe' : '') : '') +
+          (item.calibrado ? ' | seletor calibrado' : '')
+      );
+      if (item.encontrado && item.seletor) linhas.push('        seletor: ' + item.seletor);
+    });
+    linhas.push('');
+
+    linhas.push('-- Opções dos combos --');
+    ['ocorrencia', 'servico', 'causa'].forEach(function (chave) {
+      const lista = (r.opcoes || {})[chave];
+      if (lista == null) {
+        linhas.push(chave + ': (não lida)');
+        return;
+      }
+      linhas.push(chave + ' (' + lista.length + '):');
+      lista.forEach(function (opcao) {
+        linhas.push('  - ' + opcao);
+      });
+    });
+    linhas.push('');
+
+    if ((r.conferenciaDoPreset || []).length) {
+      linhas.push('-- Preset “' + ((r.preset && r.preset.nome) || '?') + '” contra a produção --');
+      r.conferenciaDoPreset.forEach(function (c) {
+        linhas.push(
+          c.situacao.toUpperCase() + ' | ' + c.campo + ': “' + c.valor + '”' + (c.sugestao ? ' → sugestão: “' + c.sugestao + '”' : '')
+        );
+      });
+      linhas.push('');
+    }
+
+    if ((r.problemas || []).length) {
+      linhas.push('-- Problemas --');
+      r.problemas.forEach(function (p) {
+        linhas.push('* ' + p);
+      });
+    } else {
+      linhas.push('-- Nenhum problema encontrado --');
+    }
+
+    return linhas.join('\n');
+  };
+
   diagnostico.baixar = function (dados, nome) {
     const conteudo = JSON.stringify(dados || diagnostico.capturar(), null, 2);
     const blob = new Blob([conteudo], { type: 'application/json' });

@@ -97,6 +97,7 @@ O painel tem:
 | **Só ocorrência** | Lança a ocorrência e deixa a OS aberta |
 | **Lote** (`Alt+Shift+F`) | Fecha várias OS da lista do Monitor de Atendimento |
 | **Log** | Passo a passo da última execução (útil quando algo falha) |
+| **Conferir tela** | **Só leitura.** Mostra o que o script encontra na tela e lista as opções reais dos combos |
 | **⚙** | Presets, comportamento, calibração de seletores e diagnóstico |
 
 **Comece pelo "Simular"** nos primeiros chamados: ele preenche tudo e para, então você
@@ -107,6 +108,44 @@ Durante a execução o painel mostra o passo atual. `Esc` cancela. Qualquer dive
 (combo sem a opção do preset, campo que não aceitou a data, botão não encontrado) **aborta
 o fluxo** e mostra o motivo — o script nunca salva uma ocorrência pela metade nem fecha a OS
 sem antes confirmar que a ocorrência entrou.
+
+## Primeira rodada em produção
+
+A ordem abaixo vai do mais seguro para o mais definitivo. Cada passo produz um texto que dá para
+copiar e mandar, então em geral **uma rodada resolve** em vez de uma ida e volta por campo.
+
+### Passo 1 — "Conferir tela" (não altera nada)
+
+Abra um chamado no Neovero e clique em **Conferir tela**. O script:
+
+- localiza a janela da OS, lê o número e a data de abertura;
+- procura os botões "Ocorrência", "Fechar OS" e "Iniciar Atendimento";
+- abre o modal "Nova Ocorrência", identifica cada campo, **lista todas as opções** dos combos
+  Ocorrência/Serviço/Causa e fecha o modal com "Cancelar".
+
+O único efeito é abrir e cancelar o modal. Nada é salvo, e o atendimento não é iniciado.
+
+No fim aparece um relatório com ✓ / ✕ por elemento, as opções encontradas e uma comparação
+**preset × produção** (se o "SUPORTE - TI" e o "CONFIGURAÇÃO DE EQUIPAMENTOS" do preset existem
+com esse nome exato lá). Clique em **Copiar para enviar** e mande o texto.
+
+### Passo 2 — "Simular" (preenche e para antes de salvar)
+
+Com os presets acertados, clique em **Simular**. Ele preenche o modal e **não salva**.
+Nesse modo o fluxo é tolerante: se um campo falhar, ele registra o problema e continua, para você
+ver todos os pontos de uma vez. O painel diz quantos problemas houve; o **Log** tem o detalhe.
+A simulação também não clica em "Iniciar Atendimento", justamente para não mexer no chamado.
+
+### Passo 3 — Fechar um chamado de verdade
+
+Escolha um chamado que você fecharia de qualquer forma e clique em **Fechar chamado**. Confira o
+resultado na tela (ocorrência lançada, OS encerrada). Se algo falhar no meio, o fluxo para: a
+ocorrência pode ter sido lançada sem a OS ser fechada, e aí basta fechar à mão.
+
+### Passo 4 — Só depois disso, lote
+
+O modo **Lote** vem desligado. Só faz sentido depois que o passo 3 estiver saindo redondo várias
+vezes seguidas, porque ele repete o mesmo preset em vários chamados.
 
 ## Presets
 

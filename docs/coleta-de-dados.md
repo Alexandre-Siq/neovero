@@ -1,6 +1,36 @@
 # Como coletar as informações para o ajuste fino
 
-Cada item abaixo é independente: mande o que der. O item 1 é o mais importante.
+Cada item abaixo é independente: mande o que der. Comece pelo item 0 — ele é só leitura e é o que
+resolve mais rápido.
+
+## 0. Relatório do "Conferir tela" (comece por aqui)
+
+1. Abra um chamado no Neovero.
+2. No painel Neovero+, clique em **Conferir tela**. Nada é salvo: o script só olha a tela, abre o
+   modal "Nova Ocorrência" para inspecionar os campos e o fecha com "Cancelar".
+3. Clique em **Copiar para enviar** e cole o texto na conversa.
+
+O texto tem três partes que respondem quase tudo de uma vez:
+
+```
+-- Elementos --
+OK    | Botão "Ocorrência" | div.botao-adicionar“Ocorrência”
+FALTA | Botão "Fechar OS"
+        seletor: ...
+
+-- Opções dos combos --
+ocorrencia (7):
+  - SUPORTE - TI
+  - MANUTENÇÃO PREDIAL
+  ...
+
+-- Preset “TI — Configuração de equipamentos” contra a produção --
+EXATO       | Ocorrência: “SUPORTE - TI”
+APROXIMADO  | Serviço: “CONFIGURAÇÃO DE EQUIPAMENTOS” → sugestão: “CONFIGURACAO DE EQUIPAMENTOS”
+```
+
+Ou seja: o que o script não achou (para eu corrigir a localização ou você calibrar por clique),
+a lista real de opções (para os presets saírem certos) e onde o preset divergiu da produção.
 
 ## 1. Log de uma execução em "Simular"
 

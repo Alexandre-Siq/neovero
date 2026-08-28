@@ -1932,6 +1932,70 @@
   };
 
   /*
+   * Abre a lista de um combo customizado e devolve o painel flutuante.
+   * `reavaliar` recalcula o painel depois de digitar, para combos com filtro.
+   */
+  campos.abrirPainel = async function (el, options) {
+    const opts = options || {};
+    const rotulo = opts.rotulo || 'combo';
+    const tempos = NV.config.obter().tempos;
+    const antes = dom.snapshot();
+    const gatilho = dom.alvoClicavel(el, 2) || el;
+    dom.clicar(gatilho);
+
+    const esperar = function (sufixo) {
+      return async.waitFor(function () {
+        return painelAberto(antes, el);
+      }, {
+        timeout: tempos.elemento,
+        intervalo: tempos.intervalo,
+        rotulo: 'lista de opções de ' + rotulo + (sufixo || '')
+      });
+    };
+
+    let painel;
+    try {
+      painel = await esperar();
+    } catch (erro) {
+      /* Alguns combos só abrem a lista depois de digitar. */
+      if (el.tagName === 'INPUT' && opts.filtro) {
+        await dom.digitar(el, String(opts.filtro).slice(0, 12));
+        painel = await esperar(' (após digitar)');
+      } else {
+        throw erro;
+      }
+    }
+
+    return {
+      painel: painel,
+      reavaliar: function () {
+        return painelAberto(antes, el) || painel;
+      }
+    };
+  };
+
+  /* Lista as opções disponíveis sem selecionar nada (usado no "Conferir tela"). */
+  campos.listarOpcoes = async function (el, options) {
+    const opts = options || {};
+    if (!el) return null;
+    if (el.tagName === 'SELECT') {
+      return Array.prototype.slice
+        .call(el.options)
+        .map(function (o) {
+          return o.textContent.trim();
+        })
+        .filter(Boolean);
+    }
+    const aberto = await campos.abrirPainel(el, { rotulo: opts.rotulo });
+    const opcoes = opcoesDe(aberto.painel).map(function (o) {
+      return o.texto;
+    });
+    campos.fecharPainel(el);
+    await async.sleep(150);
+    return opcoes;
+  };
+
+  /*
    * Seleciona um valor em combo nativo (<select>) ou em widget customizado
    * (clique no gatilho -> painel flutuante -> clique na opção).
    */
@@ -1960,37 +2024,15 @@
     }
 
     const tempos = NV.config.obter().tempos;
-    const antes = dom.snapshot();
-    const gatilho = dom.alvoClicavel(el, 2) || el;
-    dom.clicar(gatilho);
-
-    let painel = null;
-    try {
-      painel = await async.waitFor(() => painelAberto(antes, el), {
-        timeout: tempos.elemento,
-        intervalo: tempos.intervalo,
-        rotulo: 'lista de opções de ' + rotulo
-      });
-    } catch (erro) {
-      /* Alguns combos só abrem a lista depois de digitar. */
-      if (el.tagName === 'INPUT') {
-        await dom.digitar(el, String(valor).slice(0, 12));
-        painel = await async.waitFor(() => painelAberto(antes, el), {
-          timeout: tempos.elemento,
-          intervalo: tempos.intervalo,
-          rotulo: 'lista de opções de ' + rotulo + ' (após digitar)'
-        });
-      } else {
-        throw erro;
-      }
-    }
+    const aberto = await campos.abrirPainel(el, { rotulo: rotulo, filtro: valor });
+    let painel = aberto.painel;
 
     let melhor = text.pickBest(opcoesDe(painel), valor, { getText: (o) => o.texto, min: 0.8 });
 
     if (!melhor && el.tagName === 'INPUT') {
       await dom.digitar(el, String(valor).slice(0, 12));
       await async.sleep(250);
-      const painel2 = painelAberto(antes, el) || painel;
+      const painel2 = aberto.reavaliar();
       melhor = text.pickBest(opcoesDe(painel2), valor, { getText: (o) => o.texto, min: 0.8 });
       if (melhor) painel = painel2;
     }
@@ -2197,18 +2239,23 @@
 
   fluxo.preencherModal = async function (modal, preset, contexto, passo) {
     const datas = NV.dates.resolve(preset.datas, { agora: contexto.agora, aberturaOS: contexto.aberturaOS });
+    /*
+     * Na simulação seguimos mesmo quando um campo falha, para o usuário ver todos os
+     * problemas em uma passada só. Salvando de verdade, qualquer falha aborta.
+     */
+    const tolerante = contexto.tolerante ? { opcional: true } : undefined;
 
     await passo('Selecionar ocorrência: ' + preset.ocorrencia, function () {
       return campos.definirCombo(localizar.campoOcorrencia(modal), preset.ocorrencia, { rotulo: 'Ocorrência' });
-    });
+    }, tolerante);
 
     await passo('Data da ocorrência: ' + NV.dates.format(datas.inicio), function () {
       return campos.definirData(localizar.campoDataOcorrencia(modal), datas.inicio, { rotulo: 'Data da Ocorrência' });
-    });
+    }, tolerante);
 
     await passo('Data final do serviço: ' + NV.dates.format(datas.fim), function () {
       return campos.definirData(localizar.campoDataFinal(modal), datas.fim, { rotulo: 'Data Final do Serviço' });
-    });
+    }, tolerante);
 
     if (preset.local) {
       await passo('Marcar ' + preset.local, function () {
@@ -2224,7 +2271,7 @@
 
     await passo('Selecionar serviço: ' + preset.servico, function () {
       return campos.definirCombo(localizar.campoServico(modal), preset.servico, { rotulo: 'Serviço' });
-    });
+    }, tolerante);
 
     if (preset.observacao) {
       await passo('Preencher observação', function () {
@@ -2264,6 +2311,178 @@
   };
 
   /*
+   * Levantamento da tela: descobre o que o script consegue localizar e quais são as
+   * opções reais dos combos, sem preencher nem salvar nada. É o primeiro passo seguro
+   * em produção — o único efeito é abrir e fechar o modal "Nova Ocorrência".
+   */
+  fluxo.levantamento = async function (options) {
+    const opts = options || {};
+    const cfg = NV.config.obter();
+    const tempos = cfg.tempos;
+    const preset = opts.preset || NV.config.presetAtivo();
+    const relatorio = {
+      gerado: new Date().toISOString(),
+      versao: NV.VERSAO,
+      url: location.origin + location.pathname,
+      documentos: dom.documentos().length,
+      preset: preset ? { nome: preset.nome, ocorrencia: preset.ocorrencia, servico: preset.servico, causa: preset.causa } : null,
+      elementos: [],
+      opcoes: {},
+      conferenciaDoPreset: [],
+      problemas: []
+    };
+
+    function anotar(chave, rotulo, el, extra) {
+      const item = {
+        chave: chave,
+        rotulo: rotulo,
+        encontrado: !!el,
+        descricao: el ? dom.descrever(el) : null,
+        seletor: el ? dom.caminhoCss(el) : null,
+        calibrado: !!NV.config.seletor(chave)
+      };
+      if (extra) Object.assign(item, extra);
+      if (el) {
+        item.tag = el.tagName.toLowerCase();
+        item.tipo = el.getAttribute('type') || el.getAttribute('role') || null;
+        item.emFrame = el.ownerDocument !== document;
+      } else {
+        relatorio.problemas.push('Não encontrei: ' + rotulo);
+      }
+      relatorio.elementos.push(item);
+      return el;
+    }
+
+    const janela = localizar.janelaOs();
+    const janelaValida = janela && janela !== document.body;
+    anotar('janelaOs', 'Janela da Ordem de Serviço', janelaValida ? janela : null);
+    relatorio.numeroOs = janelaValida ? localizar.numeroOs(janela) : null;
+    const abertura = janelaValida ? localizar.dataAbertura(janela) : null;
+    relatorio.aberturaOs = abertura ? NV.dates.format(abertura) : null;
+    if (janelaValida && !relatorio.numeroOs) relatorio.problemas.push('Não consegui ler o número da OS no título da janela');
+
+    const escopo = janelaValida ? janela : document;
+    const botaoOcorrencia = anotar('botaoOcorrencia', 'Botão "Ocorrência"', localizar.botaoOcorrencia(escopo));
+    anotar('botaoFecharOs', 'Botão "Fechar OS"', localizar.botaoFecharOs(escopo));
+    anotar('botaoIniciarAtendimento', 'Botão "Iniciar Atendimento" (opcional)', localizar.botaoIniciarAtendimento(escopo), {
+      opcional: true
+    });
+
+    if (!botaoOcorrencia || opts.abrirModal === false) {
+      relatorio.modalAberto = false;
+      return relatorio;
+    }
+
+    let modal = null;
+    try {
+      dom.clicar(botaoOcorrencia);
+      modal = await async.waitFor(function () {
+        const atual = localizar.modalOcorrencia();
+        return atual && dom.visivel(atual) ? atual : null;
+      }, { timeout: tempos.modal, intervalo: tempos.intervalo, rotulo: 'modal "Nova Ocorrência"' });
+    } catch (erro) {
+      relatorio.modalAberto = false;
+      relatorio.problemas.push('O modal "Nova Ocorrência" não abriu: ' + String(erro.message || erro));
+      return relatorio;
+    }
+    relatorio.modalAberto = true;
+
+    const definicoesDeCampos = [
+      ['campoOcorrencia', 'Campo Ocorrência', () => localizar.campoOcorrencia(modal), 'ocorrencia'],
+      ['campoDataOcorrencia', 'Campo Data da Ocorrência', () => localizar.campoDataOcorrencia(modal), null],
+      ['campoDataFinal', 'Campo Data Final do Serviço', () => localizar.campoDataFinal(modal), null],
+      ['campoCausa', 'Campo Causa', () => localizar.campoCausa(modal), 'causa'],
+      ['campoServico', 'Campo Serviço', () => localizar.campoServico(modal), 'servico'],
+      ['campoObservacao', 'Campo Observação (opcional)', () => localizar.campoObservacao(modal), null],
+      ['botaoSalvarModal', 'Botão "Salvar" do modal', () => localizar.botaoSalvarModal(modal), null]
+    ];
+
+    const encontrados = {};
+    definicoesDeCampos.forEach(function (def) {
+      let el = null;
+      try {
+        el = def[2]();
+      } catch (erro) {
+        el = null;
+      }
+      encontrados[def[0]] = anotar(def[0], def[1], el, def[0] === 'campoObservacao' ? { opcional: true } : null);
+    });
+
+    anotar('opcaoInterno', 'Opção Interno', localizar.opcaoLocal(modal, 'interno'), { opcional: true });
+    anotar('opcaoExterno', 'Opção Externo', localizar.opcaoLocal(modal, 'externo'), { opcional: true });
+
+    /* Listar as opções reais é o que permite acertar os presets de uma vez. */
+    const combos = [
+      ['ocorrencia', 'Ocorrência', encontrados.campoOcorrencia],
+      ['servico', 'Serviço', encontrados.campoServico],
+      ['causa', 'Causa', encontrados.campoCausa]
+    ];
+    for (let i = 0; i < combos.length; i += 1) {
+      const chave = combos[i][0];
+      const el = combos[i][2];
+      if (!el) continue;
+      try {
+        relatorio.opcoes[chave] = await campos.listarOpcoes(el, { rotulo: combos[i][1] });
+      } catch (erro) {
+        relatorio.opcoes[chave] = null;
+        relatorio.problemas.push('Não consegui abrir a lista de "' + combos[i][1] + '": ' + String(erro.message || erro));
+      }
+    }
+
+    /* Confere se os valores do preset existem de fato nas listas da produção. */
+    if (preset) {
+      [
+        ['Ocorrência', preset.ocorrencia, relatorio.opcoes.ocorrencia],
+        ['Serviço', preset.servico, relatorio.opcoes.servico],
+        ['Causa', preset.causa, relatorio.opcoes.causa]
+      ].forEach(function (par) {
+        const rotulo = par[0];
+        const valor = par[1];
+        const lista = par[2];
+        if (!valor) return;
+        if (!lista) {
+          relatorio.conferenciaDoPreset.push({ campo: rotulo, valor: valor, situacao: 'lista não lida' });
+          return;
+        }
+        const exato = lista.some(function (o) {
+          return text.equals(o, valor);
+        });
+        if (exato) {
+          relatorio.conferenciaDoPreset.push({ campo: rotulo, valor: valor, situacao: 'exato' });
+          return;
+        }
+        const melhor = text.pickBest(lista, valor, { min: 0.5 });
+        relatorio.conferenciaDoPreset.push({
+          campo: rotulo,
+          valor: valor,
+          situacao: melhor ? 'aproximado' : 'ausente',
+          sugestao: melhor ? melhor.item : null
+        });
+        relatorio.problemas.push(
+          'O ' + rotulo + ' do preset (“' + valor + '”) não existe exatamente na lista' +
+            (melhor ? '. Mais parecido: “' + melhor.item + '”' : '')
+        );
+      });
+    }
+
+    /* Fecha o modal sem salvar. */
+    try {
+      const cancelar = dom.acharBotao(modal, cfg.rotulos.cancelarModal, { min: 0.98 });
+      if (cancelar) dom.clicar(cancelar);
+      else campos.fecharPainel(modal);
+      await async.sleep(300);
+      relatorio.modalFechado = !localizar.modalOcorrencia();
+    } catch (erro) {
+      relatorio.modalFechado = false;
+    }
+    if (!relatorio.modalFechado) {
+      relatorio.problemas.push('Não consegui fechar o modal automaticamente — feche com "Cancelar".');
+    }
+
+    return relatorio;
+  };
+
+  /*
    * Fluxo principal.
    * options: { preset, execucaoSeca, apenasOcorrencia, aoProgresso, sinal, aoConfirmar }
    */
@@ -2300,7 +2519,8 @@
       const aberturaOS = localizar.dataAbertura(janela);
       NV.log.info('OS em foco', { numero: numero, abertura: aberturaOS ? NV.dates.format(aberturaOS) : null });
 
-      if (cfg.autoIniciarAtendimento) {
+      /* Simulação não deve mexer em nada: iniciar atendimento altera o estado da OS. */
+      if (cfg.autoIniciarAtendimento && !execucaoSeca) {
         await passo('Iniciar atendimento (se pendente)', async function () {
           const botao = localizar.botaoIniciarAtendimento(janela);
           if (!botao || !dom.visivel(botao)) return { necessario: false };
@@ -2314,15 +2534,28 @@
         return fluxo.abrirModalOcorrencia(janela, tempos);
       });
 
-      const datas = await fluxo.preencherModal(modal, preset, { agora: opts.agora, aberturaOS: aberturaOS }, passo);
+      const datas = await fluxo.preencherModal(
+        modal,
+        preset,
+        { agora: opts.agora, aberturaOS: aberturaOS, tolerante: execucaoSeca },
+        passo
+      );
 
       if (execucaoSeca) {
-        NV.log.info('Execução seca: modal preenchido e mantido aberto para conferência');
+        const pulados = estado.passos.filter(function (p) {
+          return p.pulado;
+        });
+        NV.log.info('Execução seca: modal preenchido e mantido aberto para conferência', {
+          problemas: pulados.length
+        });
         return {
           ok: true,
           execucaoSeca: true,
           numeroOs: numero,
           datas: datas,
+          problemas: pulados.map(function (p) {
+            return { passo: p.passo, motivo: p.motivo };
+          }),
           passos: estado.passos,
           ms: Date.now() - inicio
         };
@@ -2737,6 +2970,69 @@
     };
   };
 
+  /*
+   * Resumo em texto do levantamento, pensado para ser colado numa conversa.
+   * Mais útil que o JSON completo na primeira rodada de ajustes.
+   */
+  diagnostico.resumoTexto = function (relatorio) {
+    const r = relatorio || {};
+    const linhas = [];
+    linhas.push('=== Neovero+ · Conferir tela ===');
+    linhas.push('Versão: ' + (r.versao || '?') + ' · ' + (r.gerado || ''));
+    linhas.push('URL: ' + (r.url || ''));
+    linhas.push('Documentos na página (1 = sem iframe): ' + (r.documentos != null ? r.documentos : '?'));
+    linhas.push('OS em foco: ' + (r.numeroOs || 'não identificada') + ' · abertura: ' + (r.aberturaOs || 'não lida'));
+    linhas.push('Modal abriu: ' + (r.modalAberto ? 'sim' : 'não') + (r.modalAberto ? ' · fechou: ' + (r.modalFechado ? 'sim' : 'não') : ''));
+    linhas.push('');
+
+    linhas.push('-- Elementos --');
+    (r.elementos || []).forEach(function (item) {
+      const marca = item.encontrado ? 'OK   ' : item.opcional ? 'FALTA(opcional)' : 'FALTA';
+      linhas.push(
+        marca + ' | ' + item.rotulo +
+          (item.encontrado ? ' | ' + item.descricao + (item.emFrame ? ' | dentro de iframe' : '') : '') +
+          (item.calibrado ? ' | seletor calibrado' : '')
+      );
+      if (item.encontrado && item.seletor) linhas.push('        seletor: ' + item.seletor);
+    });
+    linhas.push('');
+
+    linhas.push('-- Opções dos combos --');
+    ['ocorrencia', 'servico', 'causa'].forEach(function (chave) {
+      const lista = (r.opcoes || {})[chave];
+      if (lista == null) {
+        linhas.push(chave + ': (não lida)');
+        return;
+      }
+      linhas.push(chave + ' (' + lista.length + '):');
+      lista.forEach(function (opcao) {
+        linhas.push('  - ' + opcao);
+      });
+    });
+    linhas.push('');
+
+    if ((r.conferenciaDoPreset || []).length) {
+      linhas.push('-- Preset “' + ((r.preset && r.preset.nome) || '?') + '” contra a produção --');
+      r.conferenciaDoPreset.forEach(function (c) {
+        linhas.push(
+          c.situacao.toUpperCase() + ' | ' + c.campo + ': “' + c.valor + '”' + (c.sugestao ? ' → sugestão: “' + c.sugestao + '”' : '')
+        );
+      });
+      linhas.push('');
+    }
+
+    if ((r.problemas || []).length) {
+      linhas.push('-- Problemas --');
+      r.problemas.forEach(function (p) {
+        linhas.push('* ' + p);
+      });
+    } else {
+      linhas.push('-- Nenhum problema encontrado --');
+    }
+
+    return linhas.join('\n');
+  };
+
   diagnostico.baixar = function (dados, nome) {
     const conteudo = JSON.stringify(dados || diagnostico.capturar(), null, 2);
     const blob = new Blob([conteudo], { type: 'application/json' });
@@ -3070,8 +3366,8 @@
     ocupado = valor;
     refs.btnFechar.textContent = valor ? 'Cancelar' : 'Fechar chamado';
     refs.btnFechar.classList.toggle('perigo', valor);
-    [refs.btnSimular, refs.btnOcorrencia, refs.btnLote].forEach(function (b) {
-      b.disabled = valor;
+    [refs.btnSimular, refs.btnOcorrencia, refs.btnLote, refs.btnConferir].forEach(function (b) {
+      if (b) b.disabled = valor;
     });
   }
 
@@ -3111,7 +3407,13 @@
         )
       );
       if (resultado.ok && resultado.execucaoSeca) {
-        status('✓ Simulação: modal preenchido. Confira e salve manualmente.', 'ok');
+        const problemas = (resultado.problemas || []).length;
+        status(
+          problemas
+            ? '⚠ Simulação com ' + problemas + ' problema(s). Abra o Log e me mande o texto.'
+            : '✓ Simulação: modal preenchido. Confira e salve manualmente.',
+          problemas ? 'erro' : 'ok'
+        );
       } else if (resultado.ok && resultado.fechada) {
         status('✓ OS ' + (resultado.numeroOs || '') + ' fechada em ' + (resultado.ms / 1000).toFixed(1) + 's', 'ok');
       } else if (resultado.ok) {
@@ -3173,6 +3475,115 @@
         '.<br>Confirmar o fechamento da Ordem de Serviço?',
       'Fechar OS'
     );
+  }
+
+  /* ---------------- conferir tela (levantamento) ---------------- */
+
+  async function conferirTela() {
+    if (ocupado) return;
+    definirOcupado(true);
+    status('… conferindo a tela (não altera nada)', 'trabalhando');
+    let relatorio = null;
+    try {
+      relatorio = await NV.fluxo.levantamento({});
+    } catch (erro) {
+      status('✗ ' + String(erro.message || erro), 'erro');
+      definirOcupado(false);
+      return;
+    }
+    definirOcupado(false);
+
+    const problemas = relatorio.problemas || [];
+    status(
+      problemas.length ? '⚠ ' + problemas.length + ' ponto(s) a ajustar — veja o relatório' : '✓ Tela reconhecida por completo',
+      problemas.length ? 'erro' : 'ok'
+    );
+
+    const linhaElemento = function (item) {
+      const cor = item.encontrado ? '#34d399' : item.opcional ? '#fbbf24' : '#f87171';
+      const icone = item.encontrado ? '✓' : item.opcional ? '·' : '✕';
+      return (
+        '<li><span style="color:' + cor + ';font-weight:700">' + icone + '</span>' +
+        '<span class="nome">' + esc(item.rotulo) +
+        (item.encontrado ? '<br><code>' + esc(item.descricao) + '</code>' + (item.emFrame ? ' <span class="badge">iframe</span>' : '') : '') +
+        '</span></li>'
+      );
+    };
+
+    const listaOpcoes = function (chave, rotulo) {
+      const lista = (relatorio.opcoes || {})[chave];
+      if (lista == null) return '<p class="aviso-inline">' + esc(rotulo) + ': lista não lida.</p>';
+      return (
+        '<p class="aviso-inline"><b>' + esc(rotulo) + '</b> (' + lista.length + '): ' +
+        esc(lista.slice(0, 12).join(' · ')) + (lista.length > 12 ? ' …' : '') + '</p>'
+      );
+    };
+
+    const conferencia = (relatorio.conferenciaDoPreset || [])
+      .map(function (c) {
+        const cor = c.situacao === 'exato' ? '#34d399' : c.situacao === 'aproximado' ? '#fbbf24' : '#f87171';
+        return (
+          '<li><span style="color:' + cor + ';font-weight:700">' +
+          (c.situacao === 'exato' ? '✓' : c.situacao === 'aproximado' ? '≈' : '✕') +
+          '</span><span class="nome">' + esc(c.campo) + ': “' + esc(c.valor) + '”' +
+          (c.sugestao ? '<br>sugestão da produção: <code>' + esc(c.sugestao) + '</code>' : '') +
+          '</span></li>'
+        );
+      })
+      .join('');
+
+    const html =
+      '<div class="' + (problemas.length ? 'aviso' : 'aviso-inline') + '">' +
+      (problemas.length
+        ? '<b>' + problemas.length + ' ponto(s) a ajustar.</b> Clique em “Copiar para enviar” e mande o texto — ' +
+          'com ele eu corrijo os seletores ou os presets.'
+        : 'Tudo que o fluxo precisa foi localizado nesta tela.') +
+      '</div>' +
+      '<fieldset><legend>Ambiente</legend>' +
+      '<p class="aviso-inline">OS em foco: <b>' + esc(relatorio.numeroOs || 'não identificada') + '</b> · ' +
+      'abertura: ' + esc(relatorio.aberturaOs || 'não lida') + ' · ' +
+      'documentos na página: ' + relatorio.documentos + (relatorio.documentos > 1 ? ' (usa iframe)' : '') + '</p>' +
+      '</fieldset>' +
+      '<fieldset><legend>Elementos</legend><ul class="lista" style="max-height:none">' +
+      (relatorio.elementos || []).map(linhaElemento).join('') +
+      '</ul></fieldset>' +
+      '<fieldset><legend>Opções encontradas na produção</legend>' +
+      listaOpcoes('ocorrencia', 'Ocorrência') +
+      listaOpcoes('servico', 'Serviço') +
+      listaOpcoes('causa', 'Causa') +
+      '</fieldset>' +
+      (conferencia
+        ? '<fieldset><legend>Preset × produção</legend><ul class="lista" style="max-height:none">' + conferencia + '</ul></fieldset>'
+        : '') +
+      (problemas.length
+        ? '<fieldset><legend>Problemas</legend><ul class="lista" style="max-height:none">' +
+          problemas.map((p) => '<li><span class="nome">' + esc(p) + '</span></li>').join('') +
+          '</ul></fieldset>'
+        : '');
+
+    const sobre = abrirSobreposicao(
+      'Conferir tela',
+      html,
+      '<button class="acao secundaria" data-baixar>Baixar JSON completo</button>' +
+        '<button class="acao" data-copiar>Copiar para enviar</button>'
+    );
+
+    sobre.querySelector('[data-copiar]').addEventListener('click', function () {
+      const texto = NV.diagnostico.resumoTexto(relatorio);
+      navigator.clipboard.writeText(texto).then(
+        function () {
+          sobre.querySelector('[data-copiar]').textContent = 'Copiado!';
+        },
+        function () {
+          window.prompt('Copie o texto abaixo:', texto);
+        }
+      );
+    });
+    sobre.querySelector('[data-baixar]').addEventListener('click', function () {
+      const completo = NV.diagnostico.capturar();
+      completo.levantamento = relatorio;
+      NV.diagnostico.baixar(completo);
+    });
   }
 
   /* ---------------- log ---------------- */
@@ -3777,6 +4188,7 @@
       '<button class="acao secundaria" data-lote>Lote</button>' +
       '<button class="acao secundaria" data-log>Log</button>' +
       '</div>' +
+      '<button class="acao secundaria" data-conferir title="Só leitura: mostra o que o script encontra nesta tela">Conferir tela</button>' +
       '<div class="status" data-status></div>' +
       '</div>';
     raiz.appendChild(container);
@@ -3790,6 +4202,7 @@
       btnOcorrencia: container.querySelector('[data-so-ocorrencia]'),
       btnLote: container.querySelector('[data-lote]'),
       btnLog: container.querySelector('[data-log]'),
+      btnConferir: container.querySelector('[data-conferir]'),
       status: container.querySelector('[data-status]')
     };
 
@@ -3810,6 +4223,7 @@
     refs.btnOcorrencia.addEventListener('click', () => executar({ apenasOcorrencia: true }));
     refs.btnLote.addEventListener('click', abrirLote);
     refs.btnLog.addEventListener('click', abrirLog);
+    refs.btnConferir.addEventListener('click', conferirTela);
     container.querySelector('[data-config]').addEventListener('click', abrirConfig);
     container.querySelector('[data-recolher]').addEventListener('click', function () {
       const recolhido = container.classList.toggle('recolhido');
@@ -4125,6 +4539,47 @@
     igual(app.estado.fechada, true, 'a última OS deveria estar encerrada');
 
     return '2 de 2 OS fechadas em sequência';
+  });
+
+  teste('“Conferir tela” lista os elementos e as opções sem alterar nada', async function () {
+    configurarPadrao();
+    const app = window.AppFalso.montar({ numero: '202602691' });
+
+    const rel = await NV().fluxo.levantamento({});
+    igual(rel.numeroOs, '202602691', 'número da OS');
+    igual(rel.modalAberto, true, 'o modal deveria abrir');
+    igual(rel.modalFechado, true, 'o modal deveria ser fechado no fim');
+    igual(app.estado.ocorrencias.length, 0, 'não deveria salvar nada');
+    igual(app.estado.atendimentoIniciado, false, 'não deveria iniciar atendimento');
+    afirmar(rel.opcoes.ocorrencia && rel.opcoes.ocorrencia.length === 3, 'deveria listar as 3 ocorrências');
+    afirmar(rel.opcoes.servico && rel.opcoes.servico.length === 3, 'deveria listar os 3 serviços');
+    afirmar(
+      rel.conferenciaDoPreset.some(function (c) {
+        return c.campo === 'Serviço' && c.situacao === 'exato';
+      }),
+      'o serviço do preset deveria bater exatamente'
+    );
+    igual((rel.problemas || []).length, 0, 'não deveria haver problemas nesta réplica');
+
+    return 'listou ' + rel.elementos.length + ' elementos e as opções dos combos';
+  });
+
+  teste('Simulação com serviço inexistente reporta o problema sem abortar', async function () {
+    configurarPadrao();
+    const app = window.AppFalso.montar({ numero: '202602691', opcoesServico: ['TROCA DE TONER'] });
+
+    const resultado = await NV().fluxo.fecharOS({ execucaoSeca: true, agora: new Date(2026, 7, 28, 9, 19) });
+    afirmar(resultado.ok, 'a simulação não deveria abortar: ' + resultado.erro);
+    igual(resultado.problemas.length, 1, 'problemas reportados');
+    afirmar(/Selecionar serviço/.test(resultado.problemas[0].passo), 'passo inesperado: ' + resultado.problemas[0].passo);
+
+    const modal = modalAberto();
+    afirmar(modal, 'modal deveria seguir aberto');
+    igual(modal.querySelector('[data-campo="dataFinal"]').value, '28/08/2026, 09:19', 'data final ainda preenchida');
+    igual(app.estado.ocorrencias.length, 0, 'nada salvo');
+    modal.remove();
+
+    return 'seguiu até o fim e listou o campo problemático';
   });
 
   teste('Funciona com a OS dentro de um iframe (janelas MDI do ASP.NET)', async function () {

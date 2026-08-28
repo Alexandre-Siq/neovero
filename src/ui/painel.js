@@ -47,8 +47,8 @@
     ocupado = valor;
     refs.btnFechar.textContent = valor ? 'Cancelar' : 'Fechar chamado';
     refs.btnFechar.classList.toggle('perigo', valor);
-    [refs.btnSimular, refs.btnOcorrencia, refs.btnLote].forEach(function (b) {
-      b.disabled = valor;
+    [refs.btnSimular, refs.btnOcorrencia, refs.btnLote, refs.btnConferir].forEach(function (b) {
+      if (b) b.disabled = valor;
     });
   }
 
@@ -88,7 +88,13 @@
         )
       );
       if (resultado.ok && resultado.execucaoSeca) {
-        status('✓ Simulação: modal preenchido. Confira e salve manualmente.', 'ok');
+        const problemas = (resultado.problemas || []).length;
+        status(
+          problemas
+            ? '⚠ Simulação com ' + problemas + ' problema(s). Abra o Log e me mande o texto.'
+            : '✓ Simulação: modal preenchido. Confira e salve manualmente.',
+          problemas ? 'erro' : 'ok'
+        );
       } else if (resultado.ok && resultado.fechada) {
         status('✓ OS ' + (resultado.numeroOs || '') + ' fechada em ' + (resultado.ms / 1000).toFixed(1) + 's', 'ok');
       } else if (resultado.ok) {
@@ -150,6 +156,115 @@
         '.<br>Confirmar o fechamento da Ordem de Serviço?',
       'Fechar OS'
     );
+  }
+
+  /* ---------------- conferir tela (levantamento) ---------------- */
+
+  async function conferirTela() {
+    if (ocupado) return;
+    definirOcupado(true);
+    status('… conferindo a tela (não altera nada)', 'trabalhando');
+    let relatorio = null;
+    try {
+      relatorio = await NV.fluxo.levantamento({});
+    } catch (erro) {
+      status('✗ ' + String(erro.message || erro), 'erro');
+      definirOcupado(false);
+      return;
+    }
+    definirOcupado(false);
+
+    const problemas = relatorio.problemas || [];
+    status(
+      problemas.length ? '⚠ ' + problemas.length + ' ponto(s) a ajustar — veja o relatório' : '✓ Tela reconhecida por completo',
+      problemas.length ? 'erro' : 'ok'
+    );
+
+    const linhaElemento = function (item) {
+      const cor = item.encontrado ? '#34d399' : item.opcional ? '#fbbf24' : '#f87171';
+      const icone = item.encontrado ? '✓' : item.opcional ? '·' : '✕';
+      return (
+        '<li><span style="color:' + cor + ';font-weight:700">' + icone + '</span>' +
+        '<span class="nome">' + esc(item.rotulo) +
+        (item.encontrado ? '<br><code>' + esc(item.descricao) + '</code>' + (item.emFrame ? ' <span class="badge">iframe</span>' : '') : '') +
+        '</span></li>'
+      );
+    };
+
+    const listaOpcoes = function (chave, rotulo) {
+      const lista = (relatorio.opcoes || {})[chave];
+      if (lista == null) return '<p class="aviso-inline">' + esc(rotulo) + ': lista não lida.</p>';
+      return (
+        '<p class="aviso-inline"><b>' + esc(rotulo) + '</b> (' + lista.length + '): ' +
+        esc(lista.slice(0, 12).join(' · ')) + (lista.length > 12 ? ' …' : '') + '</p>'
+      );
+    };
+
+    const conferencia = (relatorio.conferenciaDoPreset || [])
+      .map(function (c) {
+        const cor = c.situacao === 'exato' ? '#34d399' : c.situacao === 'aproximado' ? '#fbbf24' : '#f87171';
+        return (
+          '<li><span style="color:' + cor + ';font-weight:700">' +
+          (c.situacao === 'exato' ? '✓' : c.situacao === 'aproximado' ? '≈' : '✕') +
+          '</span><span class="nome">' + esc(c.campo) + ': “' + esc(c.valor) + '”' +
+          (c.sugestao ? '<br>sugestão da produção: <code>' + esc(c.sugestao) + '</code>' : '') +
+          '</span></li>'
+        );
+      })
+      .join('');
+
+    const html =
+      '<div class="' + (problemas.length ? 'aviso' : 'aviso-inline') + '">' +
+      (problemas.length
+        ? '<b>' + problemas.length + ' ponto(s) a ajustar.</b> Clique em “Copiar para enviar” e mande o texto — ' +
+          'com ele eu corrijo os seletores ou os presets.'
+        : 'Tudo que o fluxo precisa foi localizado nesta tela.') +
+      '</div>' +
+      '<fieldset><legend>Ambiente</legend>' +
+      '<p class="aviso-inline">OS em foco: <b>' + esc(relatorio.numeroOs || 'não identificada') + '</b> · ' +
+      'abertura: ' + esc(relatorio.aberturaOs || 'não lida') + ' · ' +
+      'documentos na página: ' + relatorio.documentos + (relatorio.documentos > 1 ? ' (usa iframe)' : '') + '</p>' +
+      '</fieldset>' +
+      '<fieldset><legend>Elementos</legend><ul class="lista" style="max-height:none">' +
+      (relatorio.elementos || []).map(linhaElemento).join('') +
+      '</ul></fieldset>' +
+      '<fieldset><legend>Opções encontradas na produção</legend>' +
+      listaOpcoes('ocorrencia', 'Ocorrência') +
+      listaOpcoes('servico', 'Serviço') +
+      listaOpcoes('causa', 'Causa') +
+      '</fieldset>' +
+      (conferencia
+        ? '<fieldset><legend>Preset × produção</legend><ul class="lista" style="max-height:none">' + conferencia + '</ul></fieldset>'
+        : '') +
+      (problemas.length
+        ? '<fieldset><legend>Problemas</legend><ul class="lista" style="max-height:none">' +
+          problemas.map((p) => '<li><span class="nome">' + esc(p) + '</span></li>').join('') +
+          '</ul></fieldset>'
+        : '');
+
+    const sobre = abrirSobreposicao(
+      'Conferir tela',
+      html,
+      '<button class="acao secundaria" data-baixar>Baixar JSON completo</button>' +
+        '<button class="acao" data-copiar>Copiar para enviar</button>'
+    );
+
+    sobre.querySelector('[data-copiar]').addEventListener('click', function () {
+      const texto = NV.diagnostico.resumoTexto(relatorio);
+      navigator.clipboard.writeText(texto).then(
+        function () {
+          sobre.querySelector('[data-copiar]').textContent = 'Copiado!';
+        },
+        function () {
+          window.prompt('Copie o texto abaixo:', texto);
+        }
+      );
+    });
+    sobre.querySelector('[data-baixar]').addEventListener('click', function () {
+      const completo = NV.diagnostico.capturar();
+      completo.levantamento = relatorio;
+      NV.diagnostico.baixar(completo);
+    });
   }
 
   /* ---------------- log ---------------- */
@@ -754,6 +869,7 @@
       '<button class="acao secundaria" data-lote>Lote</button>' +
       '<button class="acao secundaria" data-log>Log</button>' +
       '</div>' +
+      '<button class="acao secundaria" data-conferir title="Só leitura: mostra o que o script encontra nesta tela">Conferir tela</button>' +
       '<div class="status" data-status></div>' +
       '</div>';
     raiz.appendChild(container);
@@ -767,6 +883,7 @@
       btnOcorrencia: container.querySelector('[data-so-ocorrencia]'),
       btnLote: container.querySelector('[data-lote]'),
       btnLog: container.querySelector('[data-log]'),
+      btnConferir: container.querySelector('[data-conferir]'),
       status: container.querySelector('[data-status]')
     };
 
@@ -787,6 +904,7 @@
     refs.btnOcorrencia.addEventListener('click', () => executar({ apenasOcorrencia: true }));
     refs.btnLote.addEventListener('click', abrirLote);
     refs.btnLog.addEventListener('click', abrirLog);
+    refs.btnConferir.addEventListener('click', conferirTela);
     container.querySelector('[data-config]').addEventListener('click', abrirConfig);
     container.querySelector('[data-recolher]').addEventListener('click', function () {
       const recolhido = container.classList.toggle('recolhido');

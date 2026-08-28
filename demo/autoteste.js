@@ -205,6 +205,47 @@
     return '2 de 2 OS fechadas em sequência';
   });
 
+  teste('“Conferir tela” lista os elementos e as opções sem alterar nada', async function () {
+    configurarPadrao();
+    const app = window.AppFalso.montar({ numero: '202602691' });
+
+    const rel = await NV().fluxo.levantamento({});
+    igual(rel.numeroOs, '202602691', 'número da OS');
+    igual(rel.modalAberto, true, 'o modal deveria abrir');
+    igual(rel.modalFechado, true, 'o modal deveria ser fechado no fim');
+    igual(app.estado.ocorrencias.length, 0, 'não deveria salvar nada');
+    igual(app.estado.atendimentoIniciado, false, 'não deveria iniciar atendimento');
+    afirmar(rel.opcoes.ocorrencia && rel.opcoes.ocorrencia.length === 3, 'deveria listar as 3 ocorrências');
+    afirmar(rel.opcoes.servico && rel.opcoes.servico.length === 3, 'deveria listar os 3 serviços');
+    afirmar(
+      rel.conferenciaDoPreset.some(function (c) {
+        return c.campo === 'Serviço' && c.situacao === 'exato';
+      }),
+      'o serviço do preset deveria bater exatamente'
+    );
+    igual((rel.problemas || []).length, 0, 'não deveria haver problemas nesta réplica');
+
+    return 'listou ' + rel.elementos.length + ' elementos e as opções dos combos';
+  });
+
+  teste('Simulação com serviço inexistente reporta o problema sem abortar', async function () {
+    configurarPadrao();
+    const app = window.AppFalso.montar({ numero: '202602691', opcoesServico: ['TROCA DE TONER'] });
+
+    const resultado = await NV().fluxo.fecharOS({ execucaoSeca: true, agora: new Date(2026, 7, 28, 9, 19) });
+    afirmar(resultado.ok, 'a simulação não deveria abortar: ' + resultado.erro);
+    igual(resultado.problemas.length, 1, 'problemas reportados');
+    afirmar(/Selecionar serviço/.test(resultado.problemas[0].passo), 'passo inesperado: ' + resultado.problemas[0].passo);
+
+    const modal = modalAberto();
+    afirmar(modal, 'modal deveria seguir aberto');
+    igual(modal.querySelector('[data-campo="dataFinal"]').value, '28/08/2026, 09:19', 'data final ainda preenchida');
+    igual(app.estado.ocorrencias.length, 0, 'nada salvo');
+    modal.remove();
+
+    return 'seguiu até o fim e listou o campo problemático';
+  });
+
   teste('Funciona com a OS dentro de um iframe (janelas MDI do ASP.NET)', async function () {
     configurarPadrao();
     const app = window.AppFalso.emIframe({ numero: '202602691' });

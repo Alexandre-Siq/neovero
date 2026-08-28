@@ -101,6 +101,70 @@
   };
 
   /*
+   * Abre a lista de um combo customizado e devolve o painel flutuante.
+   * `reavaliar` recalcula o painel depois de digitar, para combos com filtro.
+   */
+  campos.abrirPainel = async function (el, options) {
+    const opts = options || {};
+    const rotulo = opts.rotulo || 'combo';
+    const tempos = NV.config.obter().tempos;
+    const antes = dom.snapshot();
+    const gatilho = dom.alvoClicavel(el, 2) || el;
+    dom.clicar(gatilho);
+
+    const esperar = function (sufixo) {
+      return async.waitFor(function () {
+        return painelAberto(antes, el);
+      }, {
+        timeout: tempos.elemento,
+        intervalo: tempos.intervalo,
+        rotulo: 'lista de opções de ' + rotulo + (sufixo || '')
+      });
+    };
+
+    let painel;
+    try {
+      painel = await esperar();
+    } catch (erro) {
+      /* Alguns combos só abrem a lista depois de digitar. */
+      if (el.tagName === 'INPUT' && opts.filtro) {
+        await dom.digitar(el, String(opts.filtro).slice(0, 12));
+        painel = await esperar(' (após digitar)');
+      } else {
+        throw erro;
+      }
+    }
+
+    return {
+      painel: painel,
+      reavaliar: function () {
+        return painelAberto(antes, el) || painel;
+      }
+    };
+  };
+
+  /* Lista as opções disponíveis sem selecionar nada (usado no "Conferir tela"). */
+  campos.listarOpcoes = async function (el, options) {
+    const opts = options || {};
+    if (!el) return null;
+    if (el.tagName === 'SELECT') {
+      return Array.prototype.slice
+        .call(el.options)
+        .map(function (o) {
+          return o.textContent.trim();
+        })
+        .filter(Boolean);
+    }
+    const aberto = await campos.abrirPainel(el, { rotulo: opts.rotulo });
+    const opcoes = opcoesDe(aberto.painel).map(function (o) {
+      return o.texto;
+    });
+    campos.fecharPainel(el);
+    await async.sleep(150);
+    return opcoes;
+  };
+
+  /*
    * Seleciona um valor em combo nativo (<select>) ou em widget customizado
    * (clique no gatilho -> painel flutuante -> clique na opção).
    */
@@ -129,37 +193,15 @@
     }
 
     const tempos = NV.config.obter().tempos;
-    const antes = dom.snapshot();
-    const gatilho = dom.alvoClicavel(el, 2) || el;
-    dom.clicar(gatilho);
-
-    let painel = null;
-    try {
-      painel = await async.waitFor(() => painelAberto(antes, el), {
-        timeout: tempos.elemento,
-        intervalo: tempos.intervalo,
-        rotulo: 'lista de opções de ' + rotulo
-      });
-    } catch (erro) {
-      /* Alguns combos só abrem a lista depois de digitar. */
-      if (el.tagName === 'INPUT') {
-        await dom.digitar(el, String(valor).slice(0, 12));
-        painel = await async.waitFor(() => painelAberto(antes, el), {
-          timeout: tempos.elemento,
-          intervalo: tempos.intervalo,
-          rotulo: 'lista de opções de ' + rotulo + ' (após digitar)'
-        });
-      } else {
-        throw erro;
-      }
-    }
+    const aberto = await campos.abrirPainel(el, { rotulo: rotulo, filtro: valor });
+    let painel = aberto.painel;
 
     let melhor = text.pickBest(opcoesDe(painel), valor, { getText: (o) => o.texto, min: 0.8 });
 
     if (!melhor && el.tagName === 'INPUT') {
       await dom.digitar(el, String(valor).slice(0, 12));
       await async.sleep(250);
-      const painel2 = painelAberto(antes, el) || painel;
+      const painel2 = aberto.reavaliar();
       melhor = text.pickBest(opcoesDe(painel2), valor, { getText: (o) => o.texto, min: 0.8 });
       if (melhor) painel = painel2;
     }

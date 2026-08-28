@@ -100,18 +100,23 @@
 
   fluxo.preencherModal = async function (modal, preset, contexto, passo) {
     const datas = NV.dates.resolve(preset.datas, { agora: contexto.agora, aberturaOS: contexto.aberturaOS });
+    /*
+     * Na simulação seguimos mesmo quando um campo falha, para o usuário ver todos os
+     * problemas em uma passada só. Salvando de verdade, qualquer falha aborta.
+     */
+    const tolerante = contexto.tolerante ? { opcional: true } : undefined;
 
     await passo('Selecionar ocorrência: ' + preset.ocorrencia, function () {
       return campos.definirCombo(localizar.campoOcorrencia(modal), preset.ocorrencia, { rotulo: 'Ocorrência' });
-    });
+    }, tolerante);
 
     await passo('Data da ocorrência: ' + NV.dates.format(datas.inicio), function () {
       return campos.definirData(localizar.campoDataOcorrencia(modal), datas.inicio, { rotulo: 'Data da Ocorrência' });
-    });
+    }, tolerante);
 
     await passo('Data final do serviço: ' + NV.dates.format(datas.fim), function () {
       return campos.definirData(localizar.campoDataFinal(modal), datas.fim, { rotulo: 'Data Final do Serviço' });
-    });
+    }, tolerante);
 
     if (preset.local) {
       await passo('Marcar ' + preset.local, function () {
@@ -127,7 +132,7 @@
 
     await passo('Selecionar serviço: ' + preset.servico, function () {
       return campos.definirCombo(localizar.campoServico(modal), preset.servico, { rotulo: 'Serviço' });
-    });
+    }, tolerante);
 
     if (preset.observacao) {
       await passo('Preencher observação', function () {
@@ -167,6 +172,178 @@
   };
 
   /*
+   * Levantamento da tela: descobre o que o script consegue localizar e quais são as
+   * opções reais dos combos, sem preencher nem salvar nada. É o primeiro passo seguro
+   * em produção — o único efeito é abrir e fechar o modal "Nova Ocorrência".
+   */
+  fluxo.levantamento = async function (options) {
+    const opts = options || {};
+    const cfg = NV.config.obter();
+    const tempos = cfg.tempos;
+    const preset = opts.preset || NV.config.presetAtivo();
+    const relatorio = {
+      gerado: new Date().toISOString(),
+      versao: NV.VERSAO,
+      url: location.origin + location.pathname,
+      documentos: dom.documentos().length,
+      preset: preset ? { nome: preset.nome, ocorrencia: preset.ocorrencia, servico: preset.servico, causa: preset.causa } : null,
+      elementos: [],
+      opcoes: {},
+      conferenciaDoPreset: [],
+      problemas: []
+    };
+
+    function anotar(chave, rotulo, el, extra) {
+      const item = {
+        chave: chave,
+        rotulo: rotulo,
+        encontrado: !!el,
+        descricao: el ? dom.descrever(el) : null,
+        seletor: el ? dom.caminhoCss(el) : null,
+        calibrado: !!NV.config.seletor(chave)
+      };
+      if (extra) Object.assign(item, extra);
+      if (el) {
+        item.tag = el.tagName.toLowerCase();
+        item.tipo = el.getAttribute('type') || el.getAttribute('role') || null;
+        item.emFrame = el.ownerDocument !== document;
+      } else {
+        relatorio.problemas.push('Não encontrei: ' + rotulo);
+      }
+      relatorio.elementos.push(item);
+      return el;
+    }
+
+    const janela = localizar.janelaOs();
+    const janelaValida = janela && janela !== document.body;
+    anotar('janelaOs', 'Janela da Ordem de Serviço', janelaValida ? janela : null);
+    relatorio.numeroOs = janelaValida ? localizar.numeroOs(janela) : null;
+    const abertura = janelaValida ? localizar.dataAbertura(janela) : null;
+    relatorio.aberturaOs = abertura ? NV.dates.format(abertura) : null;
+    if (janelaValida && !relatorio.numeroOs) relatorio.problemas.push('Não consegui ler o número da OS no título da janela');
+
+    const escopo = janelaValida ? janela : document;
+    const botaoOcorrencia = anotar('botaoOcorrencia', 'Botão "Ocorrência"', localizar.botaoOcorrencia(escopo));
+    anotar('botaoFecharOs', 'Botão "Fechar OS"', localizar.botaoFecharOs(escopo));
+    anotar('botaoIniciarAtendimento', 'Botão "Iniciar Atendimento" (opcional)', localizar.botaoIniciarAtendimento(escopo), {
+      opcional: true
+    });
+
+    if (!botaoOcorrencia || opts.abrirModal === false) {
+      relatorio.modalAberto = false;
+      return relatorio;
+    }
+
+    let modal = null;
+    try {
+      dom.clicar(botaoOcorrencia);
+      modal = await async.waitFor(function () {
+        const atual = localizar.modalOcorrencia();
+        return atual && dom.visivel(atual) ? atual : null;
+      }, { timeout: tempos.modal, intervalo: tempos.intervalo, rotulo: 'modal "Nova Ocorrência"' });
+    } catch (erro) {
+      relatorio.modalAberto = false;
+      relatorio.problemas.push('O modal "Nova Ocorrência" não abriu: ' + String(erro.message || erro));
+      return relatorio;
+    }
+    relatorio.modalAberto = true;
+
+    const definicoesDeCampos = [
+      ['campoOcorrencia', 'Campo Ocorrência', () => localizar.campoOcorrencia(modal), 'ocorrencia'],
+      ['campoDataOcorrencia', 'Campo Data da Ocorrência', () => localizar.campoDataOcorrencia(modal), null],
+      ['campoDataFinal', 'Campo Data Final do Serviço', () => localizar.campoDataFinal(modal), null],
+      ['campoCausa', 'Campo Causa', () => localizar.campoCausa(modal), 'causa'],
+      ['campoServico', 'Campo Serviço', () => localizar.campoServico(modal), 'servico'],
+      ['campoObservacao', 'Campo Observação (opcional)', () => localizar.campoObservacao(modal), null],
+      ['botaoSalvarModal', 'Botão "Salvar" do modal', () => localizar.botaoSalvarModal(modal), null]
+    ];
+
+    const encontrados = {};
+    definicoesDeCampos.forEach(function (def) {
+      let el = null;
+      try {
+        el = def[2]();
+      } catch (erro) {
+        el = null;
+      }
+      encontrados[def[0]] = anotar(def[0], def[1], el, def[0] === 'campoObservacao' ? { opcional: true } : null);
+    });
+
+    anotar('opcaoInterno', 'Opção Interno', localizar.opcaoLocal(modal, 'interno'), { opcional: true });
+    anotar('opcaoExterno', 'Opção Externo', localizar.opcaoLocal(modal, 'externo'), { opcional: true });
+
+    /* Listar as opções reais é o que permite acertar os presets de uma vez. */
+    const combos = [
+      ['ocorrencia', 'Ocorrência', encontrados.campoOcorrencia],
+      ['servico', 'Serviço', encontrados.campoServico],
+      ['causa', 'Causa', encontrados.campoCausa]
+    ];
+    for (let i = 0; i < combos.length; i += 1) {
+      const chave = combos[i][0];
+      const el = combos[i][2];
+      if (!el) continue;
+      try {
+        relatorio.opcoes[chave] = await campos.listarOpcoes(el, { rotulo: combos[i][1] });
+      } catch (erro) {
+        relatorio.opcoes[chave] = null;
+        relatorio.problemas.push('Não consegui abrir a lista de "' + combos[i][1] + '": ' + String(erro.message || erro));
+      }
+    }
+
+    /* Confere se os valores do preset existem de fato nas listas da produção. */
+    if (preset) {
+      [
+        ['Ocorrência', preset.ocorrencia, relatorio.opcoes.ocorrencia],
+        ['Serviço', preset.servico, relatorio.opcoes.servico],
+        ['Causa', preset.causa, relatorio.opcoes.causa]
+      ].forEach(function (par) {
+        const rotulo = par[0];
+        const valor = par[1];
+        const lista = par[2];
+        if (!valor) return;
+        if (!lista) {
+          relatorio.conferenciaDoPreset.push({ campo: rotulo, valor: valor, situacao: 'lista não lida' });
+          return;
+        }
+        const exato = lista.some(function (o) {
+          return text.equals(o, valor);
+        });
+        if (exato) {
+          relatorio.conferenciaDoPreset.push({ campo: rotulo, valor: valor, situacao: 'exato' });
+          return;
+        }
+        const melhor = text.pickBest(lista, valor, { min: 0.5 });
+        relatorio.conferenciaDoPreset.push({
+          campo: rotulo,
+          valor: valor,
+          situacao: melhor ? 'aproximado' : 'ausente',
+          sugestao: melhor ? melhor.item : null
+        });
+        relatorio.problemas.push(
+          'O ' + rotulo + ' do preset (“' + valor + '”) não existe exatamente na lista' +
+            (melhor ? '. Mais parecido: “' + melhor.item + '”' : '')
+        );
+      });
+    }
+
+    /* Fecha o modal sem salvar. */
+    try {
+      const cancelar = dom.acharBotao(modal, cfg.rotulos.cancelarModal, { min: 0.98 });
+      if (cancelar) dom.clicar(cancelar);
+      else campos.fecharPainel(modal);
+      await async.sleep(300);
+      relatorio.modalFechado = !localizar.modalOcorrencia();
+    } catch (erro) {
+      relatorio.modalFechado = false;
+    }
+    if (!relatorio.modalFechado) {
+      relatorio.problemas.push('Não consegui fechar o modal automaticamente — feche com "Cancelar".');
+    }
+
+    return relatorio;
+  };
+
+  /*
    * Fluxo principal.
    * options: { preset, execucaoSeca, apenasOcorrencia, aoProgresso, sinal, aoConfirmar }
    */
@@ -203,7 +380,8 @@
       const aberturaOS = localizar.dataAbertura(janela);
       NV.log.info('OS em foco', { numero: numero, abertura: aberturaOS ? NV.dates.format(aberturaOS) : null });
 
-      if (cfg.autoIniciarAtendimento) {
+      /* Simulação não deve mexer em nada: iniciar atendimento altera o estado da OS. */
+      if (cfg.autoIniciarAtendimento && !execucaoSeca) {
         await passo('Iniciar atendimento (se pendente)', async function () {
           const botao = localizar.botaoIniciarAtendimento(janela);
           if (!botao || !dom.visivel(botao)) return { necessario: false };
@@ -217,15 +395,28 @@
         return fluxo.abrirModalOcorrencia(janela, tempos);
       });
 
-      const datas = await fluxo.preencherModal(modal, preset, { agora: opts.agora, aberturaOS: aberturaOS }, passo);
+      const datas = await fluxo.preencherModal(
+        modal,
+        preset,
+        { agora: opts.agora, aberturaOS: aberturaOS, tolerante: execucaoSeca },
+        passo
+      );
 
       if (execucaoSeca) {
-        NV.log.info('Execução seca: modal preenchido e mantido aberto para conferência');
+        const pulados = estado.passos.filter(function (p) {
+          return p.pulado;
+        });
+        NV.log.info('Execução seca: modal preenchido e mantido aberto para conferência', {
+          problemas: pulados.length
+        });
         return {
           ok: true,
           execucaoSeca: true,
           numeroOs: numero,
           datas: datas,
+          problemas: pulados.map(function (p) {
+            return { passo: p.passo, motivo: p.motivo };
+          }),
           passos: estado.passos,
           ms: Date.now() - inicio
         };
