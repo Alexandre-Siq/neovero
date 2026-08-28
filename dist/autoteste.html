@@ -5448,7 +5448,7 @@
       id: 'autoteste-completo',
       nome: 'Autoteste completo',
       ocorrencia: 'SUPORTE - TI',
-      servico: 'CONFIGURAÇÃO DE REDE',
+      servico: 'CONFIGURAÇÃO DE SOFTWARE',
       causa: 'ERRO DE CONFIGURAÇÃO',
       local: 'externo',
       observacao: 'Ponto de rede reconfigurado.',
@@ -5460,7 +5460,7 @@
     afirmar(resultado.ok, 'fluxo falhou: ' + resultado.erro + ' (passo: ' + resultado.passo + ')');
 
     const o = app.estado.ocorrencias[0];
-    igual(o.servico, 'CONFIGURAÇÃO DE REDE', 'serviço');
+    igual(o.servico, 'CONFIGURAÇÃO DE SOFTWARE', 'serviço');
     igual(o.causa, 'ERRO DE CONFIGURAÇÃO', 'causa');
     igual(o.observacao, 'Ponto de rede reconfigurado.', 'observação');
     igual(o.interno, false, 'deveria ter marcado Externo');
@@ -5542,7 +5542,12 @@
     igual(app.estado.ocorrencias.length, 0, 'não deveria salvar nada');
     igual(app.estado.atendimentoIniciado, false, 'não deveria iniciar atendimento');
     afirmar(rel.opcoes.ocorrencia && rel.opcoes.ocorrencia.length === 3, 'deveria listar as 3 ocorrências');
-    afirmar(rel.opcoes.servico && rel.opcoes.servico.length === 3, 'deveria listar os 3 serviços');
+    igual(
+      rel.opcoes.servico.length,
+      NV().classificar.SERVICOS_CONHECIDOS.length,
+      'quantidade de serviços lidos'
+    );
+    afirmar(rel.opcoes.servico.indexOf('LIGAR EQUIPAMENTO') >= 0, 'a lista lida deveria conter LIGAR EQUIPAMENTO');
     afirmar(
       rel.conferenciaDoPreset.some(function (c) {
         return c.campo === 'Serviço' && c.situacao === 'exato';
