@@ -22,6 +22,7 @@ Fluxo manual (hoje)                     Com o Neovero+
 
 ## Índice
 
+- [Testar sem instalar nada](#testar-sem-instalar-nada)
 - [Instalação](#instalação)
 - [Como usar](#como-usar)
 - [Presets](#presets)
@@ -30,15 +31,44 @@ Fluxo manual (hoje)                     Com o Neovero+
 - [Segurança e limites](#segurança-e-limites)
 - [Desenvolvimento](#desenvolvimento)
 
+## Testar sem instalar nada
+
+Antes de mexer em chamado de verdade, dá para conferir se a automação funciona no seu navegador.
+São dois arquivos que funcionam sozinhos (o script já vem embutido) e **não tocam no Neovero**:
+eles rodam contra uma réplica da tela.
+
+### 1. Autoteste (verificação automática)
+
+1. Baixe [`dist/autoteste.html`](dist/autoteste.html) — no GitHub, abra o arquivo e use o botão
+   *Download raw file*.
+2. Abra o arquivo baixado no Chrome/Edge (duplo clique).
+3. Ele executa 8 verificações sozinho: painel injetado, simulação preenchendo os quatro campos,
+   fechamento completo, campos opcionais, aborto quando o serviço do preset não existe, calibração
+   de seletor, modo lote e funcionamento dentro de `iframe`.
+
+**8/8 verde** = pode instalar. Se alguma falhar, clique em **Copiar relatório** e me mande o texto:
+ele diz exatamente qual passo falhou e por quê.
+
+### 2. Demonstração manual
+
+1. Baixe [`dist/demo-autonomo.html`](dist/demo-autonomo.html) e abra no navegador.
+2. É a réplica da tela do Neovero com o painel funcionando e um roteiro curto no canto inferior
+   esquerdo. Clique em **Simular**, em **Fechar chamado**, teste o `Alt+F` e o **Log** à vontade —
+   nada disso sai do seu navegador.
+
 ## Instalação
 
 ### Opção A — Tampermonkey (recomendada para testar)
 
 1. Instale a extensão [Tampermonkey](https://www.tampermonkey.net/) no Chrome/Edge/Firefox.
-2. Abra o arquivo [`dist/neovero-fechamento-rapido.user.js`](dist/neovero-fechamento-rapido.user.js),
-   copie o conteúdo, e no Tampermonkey use *Criar novo script* → cole → *Salvar*.
+2. Abra o link *raw* do arquivo [`dist/neovero-fechamento-rapido.user.js`](dist/neovero-fechamento-rapido.user.js).
+   Como o nome termina em `.user.js`, o Tampermonkey intercepta e mostra a tela de instalação —
+   clique em *Instalar*. Se a tela não aparecer, copie o conteúdo e use *Criar novo script* → cole →
+   *Salvar*.
 3. Abra `https://ishaoc.neovero.com/UI/Base/Menu.aspx#/`. Um painel escuro "Neovero+" aparece no
    canto inferior direito.
+4. Abra um chamado e use **Simular** nas primeiras vezes: ele preenche o modal e para, para você
+   conferir antes de salvar.
 
 O endereço de vocês (`ishaoc.neovero.com`) já está na lista de `@match`, então não precisa editar
 nada. Se algum dia mudar de domínio, acrescente uma linha no topo do script:
@@ -168,7 +198,7 @@ confirmação de que o fornecedor não proíbe isso em contrato.
 ```bash
 npm install       # só jsdom, usado nos testes
 npm test          # 49 testes: texto, datas, espera, config, build e fluxo completo em jsdom
-npm run build     # gera dist/ (userscript + extensão)
+npm run build     # gera dist/ (userscript, extensão, autoteste.html e demo-autonomo.html)
 ```
 
 Estrutura:
@@ -178,7 +208,14 @@ src/util/     text (comparação tolerante a acento/caixa), dates (formato pt-BR
 src/core/     config (presets), localizar (elemento lógico → DOM), campos (preencher e verificar),
               fluxo (orquestração), lote, diagnostico, log
 src/ui/       painel, estilos, aprender (captura de seletor por clique)
-test/ajuda/   réplica da tela do Neovero em jsdom, usada nos testes de fluxo
+demo/         app-falso.js (réplica da tela), autoteste.js (verificações no navegador), roteiro.js
+test/         mesma réplica rodando em jsdom, mais os testes de lógica pura
 ```
+
+A réplica da tela é a mesma nos dois lugares: `demo/app-falso.js` é carregado tanto pelas páginas
+de `dist/` quanto pelos testes em jsdom, para não existirem duas versões divergindo.
+
+Para desenvolver com recarga rápida: `npm run build` e sirva a pasta
+(`python3 -m http.server 8765`), depois abra `http://localhost:8765/demo/index.html`.
 
 O `dist/` é versionado de propósito, para instalar sem precisar de Node.
