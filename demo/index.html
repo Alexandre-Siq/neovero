@@ -1,0 +1,311 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Neovero (demonstração) — Monitor de Atendimento</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: #0d1117; color: #d7dbe0;
+    font: 13px/1.45 system-ui, "Segoe UI", Roboto, sans-serif;
+  }
+  .topo { display: flex; align-items: center; gap: 18px; background: #12161c; padding: 8px 14px; border-bottom: 1px solid #222831; }
+  .logo { font-weight: 800; color: #10b981; letter-spacing: .5px; }
+  .topo nav a { color: #9aa4b2; text-decoration: none; font-size: 12px; }
+  .area { display: flex; gap: 14px; padding: 14px; align-items: flex-start; }
+
+  .janela { background: #171c23; border: 1px solid #242b34; border-radius: 8px; overflow: hidden; }
+  .janela > .barra-titulo {
+    display: flex; align-items: center; gap: 8px; padding: 8px 10px;
+    background: #1d232b; border-bottom: 1px solid #242b34; font-weight: 600; font-size: 12px;
+  }
+  .janela > .barra-titulo .icone-fechar {
+    margin-left: auto; background: #232a33; border: 1px solid #2f3742; color: #a8b3c1;
+    border-radius: 6px; width: 26px; height: 24px; cursor: pointer;
+  }
+  .janela > .barra-titulo .icone-fechar:hover { background: #2c3540; color: #fff; }
+
+  .monitor { width: 300px; }
+  .linha-os { display: flex; gap: 8px; padding: 8px 10px; border-bottom: 1px solid #1e242c; cursor: pointer; }
+  .linha-os:hover { background: #1c222a; }
+  .linha-os .numero { color: #60a5fa; min-width: 78px; }
+  .linha-os .local { color: #8b95a3; font-size: 11px; }
+
+  .janela-os { flex: 1; max-width: 640px; }
+  .barra-os { display: flex; gap: 6px; padding: 8px 10px; border-bottom: 1px solid #242b34; }
+  .barra-os button { background: #1f252d; color: #cfd6de; border: 1px solid #2c3440; border-radius: 6px; padding: 5px 10px; cursor: pointer; }
+  .status-os { display: block; padding: 8px 12px; color: #9aa4b2; font-size: 12px; }
+  .dados-os { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; padding: 4px 12px 12px; }
+  .celula { display: grid; gap: 2px; }
+  .celula span:first-child { color: #8b95a3; font-size: 11px; }
+  .secao, .requisicao { margin: 0 12px 12px; background: #1b222a; border: 1px solid #242b34; border-radius: 8px; padding: 10px; }
+  .titulo-secao, .requisicao > div:first-child { color: #34d399; font-weight: 600; margin-bottom: 6px; }
+  .item-ocorrencia { border-top: 1px solid #242b34; padding-top: 8px; margin-top: 8px; }
+  .item-ocorrencia span { color: #8b95a3; font-size: 11px; }
+
+  .adicionar { margin: 0 12px 14px; background: #1b222a; border: 1px solid #242b34; border-radius: 8px; padding: 10px; }
+  .titulo-adicionar { text-align: center; color: #8b95a3; font-size: 11px; margin-bottom: 8px; }
+  .botoes-adicionar { display: flex; gap: 14px; justify-content: center; }
+  .botao-adicionar { display: grid; justify-items: center; gap: 5px; cursor: pointer; width: 62px; }
+  .botao-adicionar .icone {
+    width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center;
+    background: #ef4444; color: #fff; font-size: 15px;
+  }
+  .botao-adicionar:nth-child(2) .icone { background: #3b82f6; }
+  .botao-adicionar:nth-child(3) .icone { background: #a855f7; }
+  .botao-adicionar span { font-size: 11px; color: #b6bec9; }
+
+  .modal-ocorrencia {
+    position: fixed; left: 50%; top: 8%; transform: translateX(-50%);
+    width: 520px; background: #171c23; border: 1px solid #2c3440; border-radius: 10px;
+    box-shadow: 0 24px 70px rgba(0,0,0,.6); padding: 14px; z-index: 50;
+  }
+  .titulo-modal { font-size: 15px; margin-bottom: 12px; color: #e6eaee; }
+  .campo { display: grid; gap: 4px; margin-bottom: 10px; }
+  .campo.horizontal { display: flex; align-items: center; gap: 8px; }
+  .rotulo { color: #8b95a3; font-size: 11px; }
+  .combo, input[type=text], select, textarea {
+    background: #0f1319; border: 1px solid #2c3440; border-radius: 6px;
+    padding: 7px 9px; color: #dfe4ea; font: inherit; width: 100%;
+  }
+  .combo { cursor: pointer; user-select: none; }
+  .painel-opcoes {
+    position: fixed; z-index: 80; list-style: none; margin: 0; padding: 4px;
+    background: #10151b; border: 1px solid #2f3742; border-radius: 8px; min-width: 320px;
+    box-shadow: 0 16px 40px rgba(0,0,0,.6); max-height: 240px; overflow: auto;
+  }
+  .painel-opcoes li { padding: 7px 9px; border-radius: 6px; cursor: pointer; }
+  .painel-opcoes li:hover { background: #1d5b48; }
+  .rodape-modal { display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px; }
+  .rodape-modal button { border: 0; border-radius: 6px; padding: 8px 16px; cursor: pointer; }
+  .rodape-modal button:last-child { background: #10b981; color: #06281f; font-weight: 700; }
+  .rodape-modal button:first-child { background: #232a33; color: #cfd6de; }
+  .erro-modal { color: #fca5a5; font-size: 12px; margin-top: 8px; }
+  .dialogo-confirmacao {
+    position: fixed; left: 50%; top: 40%; transform: translate(-50%,-50%); z-index: 90;
+    background: #171c23; border: 1px solid #2c3440; border-radius: 10px; padding: 18px;
+    box-shadow: 0 24px 70px rgba(0,0,0,.6); display: grid; gap: 12px; justify-items: center;
+  }
+  .dialogo-confirmacao div { font-size: 14px; }
+  .dialogo-confirmacao button { border: 0; border-radius: 6px; padding: 7px 18px; cursor: pointer; margin: 0 4px; }
+  .dialogo-confirmacao button:last-child { background: #10b981; color: #06281f; font-weight: 700; }
+</style>
+</head>
+<body>
+  <div class="topo">
+    <span class="logo">neovero</span>
+    <nav><a href="#">Equipamentos</a> &nbsp; <a href="#">Ordens de Serviço</a></nav>
+  </div>
+
+  <div class="area">
+    <div class="janela monitor">
+      <div class="barra-titulo"><span>Monitor de Atendimento</span></div>
+      <div id="lista-os"></div>
+    </div>
+
+    <div class="janela janela-os" id="janela-os"></div>
+  </div>
+
+<script>
+/*
+ * Réplica de demonstração da tela do Neovero (mesma estrutura usada nos testes em jsdom).
+ * Serve para exercitar o Neovero+ sem acesso ao sistema real.
+ */
+const OPCOES_OCORRENCIA = ['SUPORTE - TI', 'MANUTENÇÃO PREDIAL', 'HIGIENIZAÇÃO'];
+const OPCOES_SERVICO = ['CONFIGURAÇÃO DE EQUIPAMENTOS', 'CONFIGURAÇÃO DE REDE', 'TROCA DE PEÇA'];
+const LISTA = [
+  ['202602693', 'ALOJAMENTO CONJUNTO - 4º ANDAR (48380)'],
+  ['202602691', '5º ANDAR - ÁREAS COMUNS (8030)'],
+  ['202602690', 'ALOJAMENTO CONJUNTO - 4º ANDAR (48380)'],
+  ['202602688', '7º ANDAR - ÁREAS COMUNS (8032)']
+];
+
+const estado = { numero: '202602691', ocorrencias: [], fechada: false, atendimentoIniciado: false };
+
+function h(tag, props, filhos) {
+  const el = document.createElement(tag);
+  Object.entries(props || {}).forEach(([k, v]) => {
+    if (k === 'texto') el.textContent = v;
+    else if (k === 'classe') el.className = v;
+    else el.setAttribute(k, v);
+  });
+  (filhos || []).forEach((f) => f && el.appendChild(f));
+  return el;
+}
+
+function combo(nome, opcoes) {
+  const gatilho = h('div', { role: 'combobox', tabindex: '0', 'data-combo': nome, classe: 'combo', texto: 'Selecione ...' });
+  gatilho.addEventListener('click', () => {
+    if (document.querySelector('ul[data-lista="' + nome + '"]')) return;
+    const lista = h('ul', { role: 'listbox', 'data-lista': nome, classe: 'painel-opcoes' });
+    opcoes.forEach((opcao) => {
+      const item = h('li', { role: 'option', texto: opcao });
+      item.addEventListener('click', () => { gatilho.textContent = opcao; lista.remove(); });
+      lista.appendChild(item);
+    });
+    document.body.appendChild(lista);
+    const r = gatilho.getBoundingClientRect();
+    lista.style.left = r.left + 'px';
+    lista.style.top = (r.bottom + 4) + 'px';
+    lista.style.minWidth = r.width + 'px';
+  });
+  return gatilho;
+}
+
+function campo(rotuloTexto, controle, attrs) {
+  return h('div', { classe: 'campo' }, [h('label', Object.assign({ texto: rotuloTexto, classe: 'rotulo' }, attrs || {})), controle]);
+}
+
+function abrirModal() {
+  const comboOcorrencia = combo('ocorrencia', OPCOES_OCORRENCIA);
+  const comboServico = combo('servico', OPCOES_SERVICO);
+  const dataOcorrencia = h('input', { type: 'text', 'data-campo': 'dataOcorrencia' });
+  const dataFinal = h('input', { type: 'text', 'data-campo': 'dataFinal' });
+  const radioInterno = h('input', { type: 'radio', id: 'interno', name: 'local', checked: 'checked' });
+  const radioExterno = h('input', { type: 'radio', id: 'externo', name: 'local' });
+  const selectCausa = h('select', { 'data-campo': 'causa' }, [
+    h('option', { value: '', texto: 'Selecione ...' }),
+    h('option', { value: '1', texto: 'FALHA DE HARDWARE' }),
+    h('option', { value: '2', texto: 'ERRO DE CONFIGURAÇÃO' })
+  ]);
+  const observacao = h('textarea', { 'data-campo': 'observacao' });
+  const continuar = h('input', { type: 'checkbox', id: 'continuar' });
+  const erro = h('div', { classe: 'erro-modal', role: 'alert' });
+  erro.style.display = 'none';
+  const botaoSalvar = h('button', { texto: 'Salvar' });
+  const botaoCancelar = h('button', { texto: 'Cancelar' });
+
+  const modal = h('div', { role: 'dialog', classe: 'modal-ocorrencia' }, [
+    h('div', { classe: 'titulo-modal', texto: 'Nova Ocorrência' }),
+    campo('Ocorrência *', comboOcorrencia),
+    h('div', { classe: 'campo' }, [
+      h('div', { classe: 'grade' }, [])
+    ]),
+    campo('Data da Ocorrência *', dataOcorrencia),
+    campo('Data Final do Serviço', dataFinal),
+    h('div', { classe: 'campo horizontal' }, [
+      h('label', { for: 'interno', texto: 'Interno' }), radioInterno,
+      h('label', { for: 'externo', texto: 'Externo' }), radioExterno
+    ]),
+    campo('Causa', selectCausa),
+    campo('Serviço *', comboServico),
+    campo('Observação', observacao),
+    h('div', { classe: 'campo horizontal' }, [h('label', { for: 'continuar', texto: 'Continuar Incluindo' }), continuar]),
+    erro,
+    h('div', { classe: 'rodape-modal' }, [botaoCancelar, botaoSalvar])
+  ]);
+
+  botaoCancelar.addEventListener('click', () => modal.remove());
+  botaoSalvar.addEventListener('click', () => {
+    const faltando = [];
+    if (comboOcorrencia.textContent === 'Selecione ...') faltando.push('Ocorrência');
+    if (comboServico.textContent === 'Selecione ...') faltando.push('Serviço');
+    if (!dataOcorrencia.value) faltando.push('Data da Ocorrência');
+    if (faltando.length) {
+      erro.style.display = '';
+      erro.textContent = 'Erro: preencha os campos obrigatórios: ' + faltando.join(', ');
+      return;
+    }
+    estado.ocorrencias.push({
+      ocorrencia: comboOcorrencia.textContent,
+      servico: comboServico.textContent,
+      inicio: dataOcorrencia.value,
+      fim: dataFinal.value
+    });
+    if (!continuar.checked) modal.remove();
+    render();
+  });
+
+  document.body.appendChild(modal);
+}
+
+function render() {
+  const alvo = document.getElementById('janela-os');
+  alvo.innerHTML = '';
+
+  const botaoFechar = h('button', { classe: 'icone-fechar', title: 'Fechar OS', texto: '✓' });
+  botaoFechar.addEventListener('click', () => {
+    if (document.querySelector('.dialogo-confirmacao')) return;
+    const dialogo = h('div', { role: 'dialog', classe: 'dialogo-confirmacao' }, [
+      h('div', { texto: 'Confirma o encerramento desta Ordem de Serviço?' })
+    ]);
+    const sim = h('button', { texto: 'Sim' });
+    const nao = h('button', { texto: 'Não' });
+    sim.addEventListener('click', () => { dialogo.remove(); estado.fechada = true; render(); });
+    nao.addEventListener('click', () => dialogo.remove());
+    dialogo.appendChild(h('div', {}, [nao, sim]));
+    document.body.appendChild(dialogo);
+  });
+
+  const botaoIniciar = h('button', { texto: 'Iniciar Atendimento' });
+  if (estado.atendimentoIniciado) botaoIniciar.style.display = 'none';
+  botaoIniciar.addEventListener('click', () => { estado.atendimentoIniciado = true; render(); });
+
+  const botaoOcorrencia = h('div', { classe: 'botao-adicionar' }, [
+    h('div', { classe: 'icone', texto: '☺' }),
+    h('span', { texto: 'Ocorrência' })
+  ]);
+  botaoOcorrencia.addEventListener('click', abrirModal);
+
+  const listaOcorrencias = h('div', { classe: 'lista-ocorrencias' });
+  estado.ocorrencias.forEach((o) => {
+    listaOcorrencias.appendChild(h('div', { classe: 'item-ocorrencia' }, [
+      h('span', { texto: o.inicio + ' solucionada em ' + o.fim }),
+      h('div', { texto: o.ocorrencia }),
+      h('div', { texto: o.servico })
+    ]));
+  });
+
+  alvo.appendChild(h('div', { classe: 'barra-titulo' }, [
+    h('span', { classe: 'titulo-os', texto: 'ORDEM DE SERVIÇO ' + estado.numero }),
+    botaoFechar
+  ]));
+  alvo.appendChild(h('div', { classe: 'barra-os' }, [
+    h('button', { texto: 'Salvar' }), h('button', { texto: 'Cancelar' }), botaoIniciar
+  ]));
+  alvo.appendChild(h('span', {
+    classe: 'status-os',
+    texto: estado.fechada ? 'OS Encerrada por KAUE HENRIQUE DOS SANTOS DIAS' : 'Aberta por KAUE HENRIQUE DOS SANTOS DIAS'
+  }));
+  alvo.appendChild(h('div', { classe: 'dados-os' }, [
+    h('div', { classe: 'celula' }, [h('span', { texto: 'Requisição' }), h('span', { texto: '14/08/2026 09:51' })]),
+    h('div', { classe: 'celula' }, [h('span', { texto: 'Abertura' }), h('span', { texto: '14/08/2026 09:51' })]),
+    h('div', { classe: 'celula' }, [h('span', { texto: 'Atendimento' }), h('span', { texto: 'Aguardando há 14 dias' })])
+  ]));
+  alvo.appendChild(h('div', { classe: 'requisicao' }, [
+    h('div', { texto: 'Requisição de Serviço' }),
+    h('div', { texto: 'computador da enfermagem nao esta ligando' })
+  ]));
+  alvo.appendChild(h('div', { classe: 'secao' }, [h('div', { classe: 'titulo-secao', texto: 'Ocorrências' }), listaOcorrencias]));
+  alvo.appendChild(h('div', { classe: 'adicionar' }, [
+    h('div', { classe: 'titulo-adicionar', texto: 'Adicionar' }),
+    h('div', { classe: 'botoes-adicionar' }, [
+      botaoOcorrencia,
+      h('div', { classe: 'botao-adicionar' }, [h('div', { classe: 'icone', texto: '⚙' }), h('span', { texto: 'Serviço' })]),
+      h('div', { classe: 'botao-adicionar' }, [h('div', { classe: 'icone', texto: '▣' }), h('span', { texto: 'Produto' })])
+    ])
+  ]));
+}
+
+const listaEl = document.getElementById('lista-os');
+LISTA.forEach(([numero, local]) => {
+  const linha = h('div', { classe: 'linha-os', tabindex: '0' }, [
+    h('span', { classe: 'numero', texto: numero }),
+    h('span', { classe: 'local', texto: local })
+  ]);
+  linha.addEventListener('click', () => {
+    estado.numero = numero;
+    estado.ocorrencias = [];
+    estado.fechada = false;
+    estado.atendimentoIniciado = false;
+    render();
+  });
+  listaEl.appendChild(linha);
+});
+
+render();
+</script>
+<script src="../dist/neovero-fechamento-rapido.user.js"></script>
+</body>
+</html>
