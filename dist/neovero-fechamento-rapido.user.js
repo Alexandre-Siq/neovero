@@ -1734,7 +1734,7 @@
       });
 
       await passo('Confirmar diálogo pós-salvamento', function () {
-        return fluxo.confirmarDialogo(tempos, 1200);
+        return fluxo.confirmarDialogo(tempos, 700);
       }, { opcional: true });
 
       await passo('Conferir ocorrência lançada', function () {
