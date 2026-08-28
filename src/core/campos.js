@@ -84,7 +84,13 @@
     return novos[0];
   }
 
-  campos.fecharPainel = function (el) {
+  /*
+   * Fecha calendário/lista flutuante com Escape. Em alguns temas o Escape também
+   * fecha o modal inteiro, por isso o comportamento nos campos de data é desligável.
+   */
+  campos.fecharPainel = function (el, options) {
+    const opts = options || {};
+    if (opts.motivo === 'data' && NV.config.obter().fecharCalendarioComEsc === false) return;
     try {
       const alvo = el || document.activeElement || document.body;
       dom.disparar(alvo, 'keydown', { key: 'Escape', keyCode: 27 });
@@ -197,7 +203,7 @@
       el.focus();
       dom.definirValor(el, valor);
       dom.disparar(el, 'blur');
-      campos.fecharPainel(el);
+      campos.fecharPainel(el, { motivo: 'data' });
       await async.sleep(120);
       if (confere()) return { valor: valor, via: 'valor' };
       if (modo === 'valor') {
@@ -207,7 +213,7 @@
 
     await dom.digitar(el, valor);
     dom.disparar(el, 'blur');
-    campos.fecharPainel(el);
+    campos.fecharPainel(el, { motivo: 'data' });
     await async.sleep(120);
     if (confere()) return { valor: valor, via: 'teclas' };
 

@@ -38,6 +38,7 @@
     autoIniciarAtendimento: true,
     salvarOsAntesDeFechar: false,
     fecharOsAposOcorrencia: true,
+    fecharCalendarioComEsc: true,
     logNoConsole: false,
     presetAtivo: 'ti-configuracao',
     presets: PRESETS_PADRAO,

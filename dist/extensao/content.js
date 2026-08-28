@@ -756,6 +756,7 @@
     autoIniciarAtendimento: true,
     salvarOsAntesDeFechar: false,
     fecharOsAposOcorrencia: true,
+    fecharCalendarioComEsc: true,
     logNoConsole: false,
     presetAtivo: 'ti-configuracao',
     presets: PRESETS_PADRAO,
@@ -1297,7 +1298,13 @@
     return novos[0];
   }
 
-  campos.fecharPainel = function (el) {
+  /*
+   * Fecha calendário/lista flutuante com Escape. Em alguns temas o Escape também
+   * fecha o modal inteiro, por isso o comportamento nos campos de data é desligável.
+   */
+  campos.fecharPainel = function (el, options) {
+    const opts = options || {};
+    if (opts.motivo === 'data' && NV.config.obter().fecharCalendarioComEsc === false) return;
     try {
       const alvo = el || document.activeElement || document.body;
       dom.disparar(alvo, 'keydown', { key: 'Escape', keyCode: 27 });
@@ -1410,7 +1417,7 @@
       el.focus();
       dom.definirValor(el, valor);
       dom.disparar(el, 'blur');
-      campos.fecharPainel(el);
+      campos.fecharPainel(el, { motivo: 'data' });
       await async.sleep(120);
       if (confere()) return { valor: valor, via: 'valor' };
       if (modo === 'valor') {
@@ -1420,7 +1427,7 @@
 
     await dom.digitar(el, valor);
     dom.disparar(el, 'blur');
-    campos.fecharPainel(el);
+    campos.fecharPainel(el, { motivo: 'data' });
     await async.sleep(120);
     if (confere()) return { valor: valor, via: 'teclas' };
 
@@ -2689,6 +2696,7 @@
       check('logNoConsole', 'Espelhar log no console do navegador') +
       '</fieldset>' +
       '<fieldset><legend>Compatibilidade</legend>' +
+      check('fecharCalendarioComEsc', 'Fechar calendário com Esc depois de escrever a data', 'Desmarque se o Esc fechar o modal inteiro.') +
       '<label class="campo">Escrita nos campos de data<select data-c="entradaDatas">' +
       ['auto', 'valor', 'teclas']
         .map((v) => '<option value="' + v + '"' + (cfg.entradaDatas === v ? ' selected' : '') + '>' + v + '</option>')
@@ -3021,10 +3029,12 @@
 
   /* ---------------- arrastar ---------------- */
 
+  let arrastando = false;
+  let dx = 0;
+  let dy = 0;
+  let globaisRegistrados = false;
+
   function habilitarArrasto() {
-    let arrastando = false;
-    let dx = 0;
-    let dy = 0;
     refs.cabecalho.addEventListener('mousedown', function (ev) {
       if (ev.target.tagName === 'BUTTON') return;
       const r = refs.painel.getBoundingClientRect();
@@ -3033,6 +3043,7 @@
       dy = ev.clientY - r.top;
       ev.preventDefault();
     });
+    if (globaisRegistrados) return;
     window.addEventListener('mousemove', function (ev) {
       if (!arrastando) return;
       const x = Math.max(0, Math.min(window.innerWidth - 80, ev.clientX - dx));
@@ -3066,9 +3077,12 @@
   }
 
   function registrarAtalhos() {
+    if (globaisRegistrados) return;
     window.addEventListener(
       'keydown',
       function (ev) {
+        /* O próprio script dispara Escape para fechar calendários; só tecla real conta. */
+        if (ev.isTrusted === false) return;
         const cfg = NV.config.obter();
         if (combinacaoBate(ev, cfg.atalhos.fechar)) {
           ev.preventDefault();
@@ -3090,8 +3104,16 @@
 
   /* ---------------- montagem ---------------- */
 
+  /* A SPA pode substituir o body inteiro e levar o painel embora: nesse caso remonta. */
+  painel.montado = function () {
+    return !!host && host.isConnected;
+  };
+
   painel.montar = function () {
-    if (host) return painel;
+    if (painel.montado()) return painel;
+    host = null;
+    raiz = null;
+    refs = {};
     const cfg = NV.config.obter();
 
     host = el('div', { 'data-nv-ui': 'painel' });
@@ -3160,6 +3182,7 @@
 
     habilitarArrasto();
     registrarAtalhos();
+    globaisRegistrados = true;
     status('Pronto. Abra uma OS e clique em Fechar chamado (' + cfg.atalhos.fechar + ').');
     return painel;
   };
@@ -3231,6 +3254,10 @@
         NV.painel.montar();
         NV.log.info('Neovero+ ativo', { versao: NV.VERSAO, host: location.host });
         globalThis.NeoveroMais = NV;
+        /* Se a aplicação trocar o conteúdo da página, o painel é remontado. */
+        setInterval(function () {
+          if (!NV.painel.montado() && pareceNeovero()) NV.painel.montar();
+        }, 5000);
         return;
       }
       await NV.async.sleep(1500);

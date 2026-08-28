@@ -309,6 +309,7 @@
       check('logNoConsole', 'Espelhar log no console do navegador') +
       '</fieldset>' +
       '<fieldset><legend>Compatibilidade</legend>' +
+      check('fecharCalendarioComEsc', 'Fechar calendário com Esc depois de escrever a data', 'Desmarque se o Esc fechar o modal inteiro.') +
       '<label class="campo">Escrita nos campos de data<select data-c="entradaDatas">' +
       ['auto', 'valor', 'teclas']
         .map((v) => '<option value="' + v + '"' + (cfg.entradaDatas === v ? ' selected' : '') + '>' + v + '</option>')
@@ -641,10 +642,12 @@
 
   /* ---------------- arrastar ---------------- */
 
+  let arrastando = false;
+  let dx = 0;
+  let dy = 0;
+  let globaisRegistrados = false;
+
   function habilitarArrasto() {
-    let arrastando = false;
-    let dx = 0;
-    let dy = 0;
     refs.cabecalho.addEventListener('mousedown', function (ev) {
       if (ev.target.tagName === 'BUTTON') return;
       const r = refs.painel.getBoundingClientRect();
@@ -653,6 +656,7 @@
       dy = ev.clientY - r.top;
       ev.preventDefault();
     });
+    if (globaisRegistrados) return;
     window.addEventListener('mousemove', function (ev) {
       if (!arrastando) return;
       const x = Math.max(0, Math.min(window.innerWidth - 80, ev.clientX - dx));
@@ -686,9 +690,12 @@
   }
 
   function registrarAtalhos() {
+    if (globaisRegistrados) return;
     window.addEventListener(
       'keydown',
       function (ev) {
+        /* O próprio script dispara Escape para fechar calendários; só tecla real conta. */
+        if (ev.isTrusted === false) return;
         const cfg = NV.config.obter();
         if (combinacaoBate(ev, cfg.atalhos.fechar)) {
           ev.preventDefault();
@@ -710,8 +717,16 @@
 
   /* ---------------- montagem ---------------- */
 
+  /* A SPA pode substituir o body inteiro e levar o painel embora: nesse caso remonta. */
+  painel.montado = function () {
+    return !!host && host.isConnected;
+  };
+
   painel.montar = function () {
-    if (host) return painel;
+    if (painel.montado()) return painel;
+    host = null;
+    raiz = null;
+    refs = {};
     const cfg = NV.config.obter();
 
     host = el('div', { 'data-nv-ui': 'painel' });
@@ -780,6 +795,7 @@
 
     habilitarArrasto();
     registrarAtalhos();
+    globaisRegistrados = true;
     status('Pronto. Abra uma OS e clique em Fechar chamado (' + cfg.atalhos.fechar + ').');
     return painel;
   };

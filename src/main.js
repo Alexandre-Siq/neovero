@@ -52,6 +52,10 @@
         NV.painel.montar();
         NV.log.info('Neovero+ ativo', { versao: NV.VERSAO, host: location.host });
         globalThis.NeoveroMais = NV;
+        /* Se a aplicação trocar o conteúdo da página, o painel é remontado. */
+        setInterval(function () {
+          if (!NV.painel.montado() && pareceNeovero()) NV.painel.montar();
+        }, 5000);
         return;
       }
       await NV.async.sleep(1500);
