@@ -63,6 +63,44 @@ test('seletores calibrados são gravados e limpos', () => {
   assert.equal(config.seletor('botaoFecharOs'), null);
 });
 
+test('migração acrescenta presets novos a uma configuração antiga', () => {
+  const antiga = {
+    presetAtivo: 'ti-configuracao',
+    presets: [
+      {
+        id: 'ti-configuracao',
+        nome: 'Meu preset editado',
+        ocorrencia: 'SUPORTE - TI',
+        servico: 'CONFIGURAÇÃO DE EQUIPAMENTOS',
+        causa: '',
+        local: 'interno',
+        observacao: '',
+        datas: { modo: 'agora', duracaoMin: 1 }
+      }
+    ],
+    seletores: { botaoFecharOs: 'button.icone-fechar' }
+  };
+
+  const migrada = config.aplicarMigracoes(config.mesclar(config.PADRAO, antiga));
+
+  assert.equal(migrada.presets.length, 3, 'os presets de fábrica que faltavam devem ser acrescentados');
+  assert.equal(migrada.presets[0].nome, 'Meu preset editado', 'a edição do usuário é preservada');
+  assert.ok(
+    migrada.presets.some((p) => p.id === 'ti-automatico' && p.servicoAutomatico),
+    'o preset de classificação automática deve aparecer'
+  );
+  assert.equal(migrada.presetAtivo, 'ti-configuracao', 'o preset ativo do usuário é mantido');
+  assert.equal(migrada.seletores.botaoFecharOs, 'button.icone-fechar', 'a calibração é preservada');
+});
+
+test('migração não roda duas vezes', () => {
+  const cfg = config.aplicarMigracoes(config.mesclar(config.PADRAO, { presets: [], migracoes: [] }));
+  const quantidade = cfg.presets.length;
+  cfg.presets = cfg.presets.filter((p) => p.id !== 'ti-automatico');
+  const novamente = config.aplicarMigracoes(cfg);
+  assert.equal(novamente.presets.length, quantidade - 1, 'preset apagado pelo usuário não deve voltar');
+});
+
 test('gerarId produz slug estável e único', () => {
   const a = config.gerarId('TI — Configuração de Equipamentos');
   assert.match(a, /^ti-configuracao-de-equipamentos-[a-z0-9]{4}$/);

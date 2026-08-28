@@ -9,6 +9,10 @@ import path from 'node:path';
 
 const RAIZ = path.dirname(new URL(import.meta.url).pathname);
 
+/* Permite ao Tampermonkey oferecer atualização em um clique. */
+const URL_DISTRIBUICAO =
+  'https://raw.githubusercontent.com/Alexandre-Siq/neovero/cursor/neovero-fechamento-rapido-3c8c/dist/neovero-fechamento-rapido.user.js';
+
 const ARQUIVOS = [
   'src/util/text.js',
   'src/util/dates.js',
@@ -41,6 +45,8 @@ function cabecalhoUserscript(pkg, matches) {
     '// @description  Lança a ocorrência e fecha a Ordem de Serviço do Neovero em um clique, com presets configuráveis.',
     '// @author       —',
     ...matches.map((m) => `// @match        ${m}`),
+    `// @updateURL    ${URL_DISTRIBUICAO}`,
+    `// @downloadURL  ${URL_DISTRIBUICAO}`,
     '// @grant        GM_setValue',
     '// @grant        GM_getValue',
     '// @run-at       document-idle',

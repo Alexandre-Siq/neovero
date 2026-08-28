@@ -7,6 +7,8 @@
 // @match        *://ishaoc.neovero.com/*
 // @match        *://*.neovero.com/*
 // @match        *://neovero.com/*
+// @updateURL    https://raw.githubusercontent.com/Alexandre-Siq/neovero/cursor/neovero-fechamento-rapido-3c8c/dist/neovero-fechamento-rapido.user.js
+// @downloadURL  https://raw.githubusercontent.com/Alexandre-Siq/neovero/cursor/neovero-fechamento-rapido-3c8c/dist/neovero-fechamento-rapido.user.js
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @run-at       document-idle
@@ -957,6 +959,9 @@
 
   const PADRAO = {
     versao: 1,
+    /* Instalação nova recebe a lista completa em carregar(); vazio aqui significa
+       "configuração antiga", que precisa passar pelas migrações. */
+    migracoes: [],
     hostsLiberados: [],
     execucaoSeca: false,
     confirmarAntesDeFechar: true,
@@ -1077,16 +1082,56 @@
     return gravou;
   }
 
+  /*
+   * Migrações: quem já tem configuração salva precisa receber os presets novos,
+   * porque a lista salva tem prioridade sobre a de fábrica. Cada migração roda
+   * uma única vez, para não ressuscitar preset que o usuário apagou de propósito.
+   */
+  const MIGRACOES = ['presets-servico-automatico'];
+
+  function aplicarMigracoes(cfg) {
+    const feitas = Array.isArray(cfg.migracoes) ? cfg.migracoes.slice() : [];
+    const novo = cfg;
+
+    if (feitas.indexOf('presets-servico-automatico') < 0) {
+      const ids = novo.presets.map(function (p) {
+        return p.id;
+      });
+      const faltando = PRESETS_PADRAO.filter(function (p) {
+        return ids.indexOf(p.id) < 0;
+      });
+      if (faltando.length) novo.presets = novo.presets.concat(clonar(faltando));
+      feitas.push('presets-servico-automatico');
+    }
+
+    novo.migracoes = feitas;
+    const existe = novo.presets.some(function (p) {
+      return p.id === novo.presetAtivo;
+    });
+    if (!existe && novo.presets.length) novo.presetAtivo = novo.presets[0].id;
+    return novo;
+  }
+
   let atual = null;
 
   const config = {
+    MIGRACOES: MIGRACOES,
+    aplicarMigracoes: aplicarMigracoes,
     CHAVE: CHAVE,
     PADRAO: PADRAO,
     clonar: clonar,
     mesclar: mesclar,
 
     carregar: function () {
-      atual = mesclar(PADRAO, lerBruto());
+      const salvo = lerBruto();
+      const mesclado = mesclar(PADRAO, salvo);
+      if (!salvo) {
+        mesclado.migracoes = MIGRACOES.slice();
+        atual = mesclado;
+      } else {
+        atual = aplicarMigracoes(mesclado);
+        gravarBruto(atual);
+      }
       return atual;
     },
 
