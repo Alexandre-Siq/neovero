@@ -101,6 +101,7 @@
     box-shadow: 0 16px 40px rgba(0,0,0,.6); max-height: 240px; overflow: auto;
   }
   .painel-opcoes li { padding: 7px 9px; border-radius: 6px; cursor: pointer; }
+  .painel-opcoes.virtual { max-height: 288px; }
   .painel-opcoes li:hover { background: #1d5b48; }
   .rodape-modal { display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px; }
   .rodape-modal button { border: 0; border-radius: 6px; padding: 8px 16px; cursor: pointer; }
@@ -150,7 +151,46 @@
    * De propósito NÃO fecha com Esc — assim o script é obrigado a exercitar as outras
    * formas de fechar, que é o pior caso que pode aparecer na produção.
    */
-  function combo(doc, nome, opcoes) {
+  /*
+   * Lista rolável que renderiza apenas a janela visível, como o combo de Serviço do
+   * Neovero (DevExpress). Em jsdom não existe layout, então o container declara
+   * scrollTop/scrollHeight/clientHeight por conta própria — é o que permite testar
+   * a leitura completa da lista.
+   */
+  function listaVirtual(doc, opcoes, aoEscolher) {
+    const ALTURA_ITEM = 24;
+    const VISIVEIS = 12;
+    const lista = h(doc, 'ul', { role: 'listbox', classe: 'painel-opcoes virtual' });
+    let topo = 0;
+
+    function render() {
+      lista.innerHTML = '';
+      const inicio = Math.max(0, Math.floor(topo / ALTURA_ITEM));
+      opcoes.slice(inicio, inicio + VISIVEIS).forEach(function (opcao) {
+        const item = h(doc, 'li', { role: 'option', texto: opcao });
+        item.addEventListener('click', function () {
+          aoEscolher(opcao);
+        });
+        lista.appendChild(item);
+      });
+    }
+
+    Object.defineProperty(lista, 'scrollHeight', { get: () => opcoes.length * ALTURA_ITEM });
+    Object.defineProperty(lista, 'clientHeight', { get: () => VISIVEIS * ALTURA_ITEM });
+    Object.defineProperty(lista, 'scrollTop', {
+      get: () => topo,
+      set: function (valor) {
+        const maximo = Math.max(0, opcoes.length * ALTURA_ITEM - VISIVEIS * ALTURA_ITEM);
+        topo = Math.max(0, Math.min(maximo, Number(valor) || 0));
+        render();
+      }
+    });
+
+    render();
+    return lista;
+  }
+
+  function combo(doc, nome, opcoes, options) {
     const gatilho = h(doc, 'div', {
       role: 'combobox',
       tabindex: '0',
@@ -179,15 +219,23 @@
         fechar();
         return;
       }
-      lista = h(doc, 'ul', { role: 'listbox', 'data-lista': nome, classe: 'painel-opcoes' });
-      opcoes.forEach(function (opcao) {
-        const item = h(doc, 'li', { role: 'option', texto: opcao });
-        item.addEventListener('click', function () {
-          gatilho.textContent = opcao;
-          fechar();
+      const escolher = function (opcao) {
+        gatilho.textContent = opcao;
+        fechar();
+      };
+      if (options && options.virtual) {
+        lista = listaVirtual(doc, opcoes, escolher);
+        lista.setAttribute('data-lista', nome);
+      } else {
+        lista = h(doc, 'ul', { role: 'listbox', 'data-lista': nome, classe: 'painel-opcoes' });
+        opcoes.forEach(function (opcao) {
+          const item = h(doc, 'li', { role: 'option', texto: opcao });
+          item.addEventListener('click', function () {
+            escolher(opcao);
+          });
+          lista.appendChild(item);
         });
-        lista.appendChild(item);
-      });
+      }
       doc.body.appendChild(lista);
       const r = gatilho.getBoundingClientRect();
       lista.style.left = r.left + 'px';
@@ -207,7 +255,9 @@
   /* Modal "Nova Ocorrência": só fecha quando os obrigatórios estão preenchidos. */
   function abrirModal(doc, estado) {
     const comboOcorrencia = combo(doc, 'ocorrencia', OPCOES_OCORRENCIA);
-    const comboServico = combo(doc, 'servico', estado.opcoesServico || opcoesDeServicoPadrao());
+    const comboServico = combo(doc, 'servico', estado.opcoesServico || opcoesDeServicoPadrao(), {
+      virtual: !!estado.servicoVirtual
+    });
     const dataOcorrencia = h(doc, 'input', { type: 'text', 'data-campo': 'dataOcorrencia' });
     const dataFinal = h(doc, 'input', { type: 'text', 'data-campo': 'dataFinal' });
     const radioInterno = h(doc, 'input', { type: 'radio', id: 'interno', name: 'local', checked: 'checked' });
@@ -296,6 +346,7 @@
       fechada: false,
       atendimentoIniciado: false,
       opcoesServico: opts.opcoesServico,
+      servicoVirtual: !!opts.servicoVirtual,
       descricao: opts.descricao || 'computador da enfermagem nao esta ligando'
     };
 

@@ -42,13 +42,13 @@ eles rodam contra uma réplica da tela.
 1. Baixe [`dist/autoteste.html`](dist/autoteste.html) — no GitHub, abra o arquivo e use o botão
    *Download raw file*.
 2. Abra o arquivo baixado no Chrome/Edge (duplo clique).
-3. Ele executa 15 verificações sozinho: painel injetado, simulação preenchendo os campos,
+3. Ele executa 16 verificações sozinho: painel injetado, simulação preenchendo os campos,
    fechamento completo, campos opcionais, aborto quando o serviço do preset não existe, calibração
    de seletor, modo lote (inclusive com classificação por descrição), "Conferir tela",
    classificação pela descrição, intervalo de 1 minuto entre as datas, fila (fechar pela lista e
-   botão flutuante sobre a linha) e `iframe`.
+   botão flutuante sobre a linha), leitura completa de combo rolável e `iframe`.
 
-**15/15 verde** = pode instalar. Se alguma falhar, clique em **Copiar relatório** e me mande o texto:
+**16/16 verde** = pode instalar. Se alguma falhar, clique em **Copiar relatório** e me mande o texto:
 ele diz exatamente qual passo falhou e por quê.
 
 ### 2. Demonstração manual
@@ -214,6 +214,13 @@ A lista de serviços vem da própria tela (o script lê o combo uma vez e guarda
 garante que ele só escolhe opções que existem de fato, e a aba de classificação avisa quando uma
 regra aponta para um serviço que não está mais na lista.
 
+**Lista completa, não só a parte visível.** O combo "Serviço" é uma lista rolável que renderiza
+apenas a janela visível (são dezenas de itens). O script rola o painel até o fim para ler todos —
+sem isso, a classificação consideraria só os primeiros serviços em ordem alfabética. A mesma
+varredura vale na hora de selecionar: se a opção escolhida não está renderizada, ele rola até
+encontrá-la e, em último recurso, digita para o próprio combo filtrar. Se a leitura vier menor que a
+lista de referência, o script completa a base, avisa no log e no relatório de "Conferir tela".
+
 Para ver o que ele faria sem fechar nada: **Conferir tela** mostra a descrição lida, o serviço
 classificado, a confiança e as alternativas.
 
@@ -226,6 +233,9 @@ O nome do serviço é comparado por palavras significativas, então uma regra ap
 Quando o script pergunta e você escolhe uma opção diferente da sugerida, ele oferece criar uma regra
 com uma palavra da descrição (você pode editar a palavra antes de confirmar). Da próxima vez, um
 chamado parecido é classificado sozinho.
+
+A caixa de escolha mostra as 6 melhores por semelhança e, abaixo, **a lista completa com busca** —
+a resposta certa não precisa estar entre as mais bem colocadas para você poder escolhê-la ali.
 
 ## Datas da ocorrência
 
@@ -278,7 +288,7 @@ por navegador (e pode ser exportado para os colegas).
 
 ## O que eu preciso de você
 
-O código já está pronto e testado contra uma réplica da tela (112 testes automatizados,
+O código já está pronto e testado contra uma réplica da tela (119 testes automatizados,
 incluindo o fluxo completo de ponta a ponta, com e sem `iframe`). O endereço já está resolvido
 (`ishaoc.neovero.com`). O que falta é ajustar aos detalhes do HTML real. Em ordem de prioridade:
 
@@ -322,7 +332,7 @@ confirmação de que o fornecedor não proíbe isso em contrato.
 
 ```bash
 npm install       # só jsdom, usado nos testes
-npm test          # 112 testes: texto, datas, espera, config, build e fluxo completo em jsdom
+npm test          # 119 testes: texto, datas, espera, config, build e fluxo completo em jsdom
 npm run build     # gera dist/ (userscript, extensão, autoteste.html e demo-autonomo.html)
 ```
 

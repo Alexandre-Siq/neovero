@@ -81,6 +81,26 @@ test('regra específica de equipamento vence a genérica de manutenção', () =>
   assert.equal(sugerir('gabinete quebrado').escolhido, 'MANUTENÇÃO DE EQUIPAMENTO');
 });
 
+/* Caso real: pedido de mudança no sistema MV, texto longo de comitê. */
+test('pedidos de mudança no sistema caem em análise/desenvolvimento', () => {
+  const comite = sugerir(
+    'Prezados, venho por meio deste chamado, informar que foi discutido em Comitê Transfusional a ' +
+      'possibilidade de ser adicionado ao sistema MV uma aba para TIPAGEM SANGUÍNEA ao lado da aba ' +
+      'de alergias dos pacientes cadastrados'
+  );
+  assert.equal(comite.escolhido, 'ANALISE DE SISTEMA');
+
+  assert.equal(sugerir('solicito criacao de nova aba no MV para tipagem sanguinea').escolhido, 'DESENVOLVIMENTO DE TELAS MVPEP');
+  assert.equal(
+    sugerir('preciso de um novo relatorio de atendimentos por setor').escolhido,
+    'DESENVOLVIMENTO DE RELATÓRIOS PERSONALIZADOS MV'
+  );
+
+  /* Com a lista inteira, as alternativas deixam de ser só as primeiras letras. */
+  const alternativas = comite.alternativas.map((a) => a.opcao).join(' ');
+  assert.match(alternativas, /MV/, 'deveria considerar serviços do meio/fim da lista');
+});
+
 test('sem regra, decide por semelhança de palavras', () => {
   const r = classificar.sugerir('necessário verificação de equipamento na sala 12', SERVICOS, { regras: [] });
   assert.equal(r.origem, 'similaridade');

@@ -102,6 +102,21 @@
    * Lista de serviços: usa o cache para não abrir o combo em todo fechamento,
    * e relê da tela quando o cache está vazio ou quando pedimos explicitamente.
    */
+  /* Une listas sem repetir, preferindo a grafia lida da tela. */
+  function unirServicos(daTela, referencia) {
+    const mapa = new Map();
+    (daTela || []).forEach(function (o) {
+      const chave = text.normalize(o);
+      if (chave) mapa.set(chave, o);
+    });
+    (referencia || []).forEach(function (o) {
+      const chave = text.normalize(o);
+      if (chave && !mapa.has(chave)) mapa.set(chave, o);
+    });
+    return Array.from(mapa.values());
+  }
+  fluxo.unirServicos = unirServicos;
+
   fluxo.opcoesDeServico = async function (modal, options) {
     const opts = options || {};
     if (!opts.forcarLeitura) {
@@ -110,9 +125,26 @@
     }
     const el = localizar.campoServico(modal);
     if (!el) throw new async.PassoError('Campo "Serviço" não encontrado para ler as opções');
-    const lidas = await campos.listarOpcoes(el, { rotulo: 'Serviço' });
-    if (lidas && lidas.length) NV.config.definirCacheServicos(lidas);
-    return { opcoes: lidas || [], origem: 'tela' };
+    const lidas = (await campos.listarOpcoes(el, { rotulo: 'Serviço' })) || [];
+
+    /*
+     * Rede de segurança: se a lista veio muito menor que a de referência, a leitura
+     * provavelmente pegou só a janela visível do combo. Classificar com meia lista
+     * escolhe o serviço errado calado, então completamos e avisamos.
+     */
+    const referencia = NV.classificar.SERVICOS_CONHECIDOS;
+    const parcial = lidas.length > 0 && lidas.length < Math.round(referencia.length * 0.6);
+    const finais = parcial ? unirServicos(lidas, referencia) : lidas;
+
+    if (parcial) {
+      NV.log.aviso('A lista de serviços lida parece incompleta; completei com a lista de referência', {
+        lidos: lidas.length,
+        referencia: referencia.length,
+        total: finais.length
+      });
+    }
+    if (finais.length) NV.config.definirCacheServicos(finais);
+    return { opcoes: finais, origem: 'tela', lidos: lidas.length, parcial: parcial };
   };
 
   /*
@@ -390,6 +422,16 @@
         if (!saida.painelFechado) {
           relatorio.problemas.push('A lista de "' + combos[i][1] + '" ficou aberta na tela — feche clicando fora.');
         }
+        if (chave === 'servico') {
+          const referencia = NV.classificar.SERVICOS_CONHECIDOS.length;
+          relatorio.servicosLidos = saida.opcoes.length;
+          if (saida.opcoes.length < Math.round(referencia * 0.6)) {
+            relatorio.problemas.push(
+              'Só ' + saida.opcoes.length + ' serviços foram lidos do combo (a referência tem ' + referencia +
+                '). A lista provavelmente não rolou até o fim — mande este relatório.'
+            );
+          }
+        }
       } catch (erro) {
         relatorio.opcoes[chave] = null;
         relatorio.problemas.push('Não consegui abrir a lista de "' + combos[i][1] + '": ' + String(erro.message || erro));
@@ -434,14 +476,20 @@
 
     /* Mostra como a descrição seria classificada, para o usuário ajustar as regras. */
     if (relatorio.descricao && (relatorio.opcoes.servico || []).length) {
-      relatorio.classificacao = NV.classificar.sugerir(relatorio.descricao, relatorio.opcoes.servico, {
+      const referencia = NV.classificar.SERVICOS_CONHECIDOS;
+      const baseParaClassificar =
+        relatorio.opcoes.servico.length < Math.round(referencia.length * 0.6)
+          ? unirServicos(relatorio.opcoes.servico, referencia)
+          : relatorio.opcoes.servico;
+      relatorio.baseDaClassificacao = baseParaClassificar.length;
+      relatorio.classificacao = NV.classificar.sugerir(relatorio.descricao, baseParaClassificar, {
         regras: NV.config.regrasDeClassificacao(),
         minimo: cfg.classificacao.minimoConfianca
       });
       if (!relatorio.classificacao.escolhido) {
         relatorio.problemas.push('A descrição não bateu com nenhum serviço: ajuste as regras em ⚙ → Classificação.');
       }
-      const regrasQuebradas = NV.classificar.conferirRegras(NV.config.regrasDeClassificacao(), relatorio.opcoes.servico);
+      const regrasQuebradas = NV.classificar.conferirRegras(NV.config.regrasDeClassificacao(), baseParaClassificar);
       if (regrasQuebradas.length) {
         relatorio.regrasInvalidas = regrasQuebradas;
         relatorio.problemas.push(

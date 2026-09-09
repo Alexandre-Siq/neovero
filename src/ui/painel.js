@@ -194,6 +194,10 @@
           })
           .join('') +
         '</ul>' +
+        '<fieldset style="margin-top:10px"><legend>Todos os serviços (' + (info.opcoes || []).length + ')</legend>' +
+        '<input type="text" data-busca placeholder="Buscar na lista completa…">' +
+        '<ul class="lista" data-todos style="max-height:200px"></ul>' +
+        '</fieldset>' +
         (palavra
           ? '<label class="check" style="margin-top:10px"><input type="checkbox" data-aprender checked>' +
             '<span>Criar regra para a palavra <input type="text" data-palavra value="' + esc(palavra) +
@@ -208,6 +212,24 @@
           (info.preset.servico ? '<button class="acao secundaria" data-preset>Usar o do preset</button>' : '') +
           '<button class="acao" data-sugerido>Usar a sugestão</button>'
       );
+
+      /* Lista completa com busca: a resposta certa pode não estar entre as 6 melhores. */
+      const listaTodos = sobre.querySelector('[data-todos]');
+      const busca = sobre.querySelector('[data-busca]');
+      const renderTodos = function () {
+        const filtro = NV.text.normalize(busca ? busca.value : '');
+        const itens = (info.opcoes || []).filter(function (o) {
+          return !filtro || NV.text.normalize(o).indexOf(filtro) >= 0;
+        });
+        listaTodos.innerHTML = itens
+          .slice(0, 60)
+          .map(function (o) {
+            return '<li><span class="nome">' + esc(o) + '</span><button class="acao" data-opcao="' + esc(o) + '">Usar</button></li>';
+          })
+          .join('') || '<li><span class="nome aviso-inline">Nada encontrado.</span></li>';
+      };
+      if (listaTodos) renderTodos();
+      if (busca) busca.addEventListener('input', renderTodos);
 
       const responder = function (valor) {
         /* Só aprende quando o usuário corrigiu a sugestão. */
@@ -464,6 +486,8 @@
       '</fieldset>' +
       (relatorio.classificacao
         ? '<fieldset><legend>Classificação do serviço</legend>' +
+          '<p class="aviso-inline">Base usada: <b>' + (relatorio.baseDaClassificacao || 0) + '</b> serviços' +
+          (relatorio.servicosLidos != null ? ' (lidos do combo: ' + relatorio.servicosLidos + ')' : '') + '</p>' +
           (relatorio.classificacao.escolhido
             ? '<p class="aviso-inline">→ <b>' + esc(relatorio.classificacao.escolhido) + '</b> · ' +
               Math.round(relatorio.classificacao.confianca * 100) + '% · ' + esc(relatorio.classificacao.origem) +
@@ -863,7 +887,11 @@
       '<fieldset><legend>Lista de serviços da produção</legend>' +
       '<p class="aviso-inline">' +
       (cache.valores && cache.valores.length
-        ? cache.valores.length + ' serviços em cache (lidos em ' + esc(String(cache.atualizadoEm || '').slice(0, 16).replace('T', ' ')) + ').'
+        ? cache.valores.length + ' serviços em cache (lidos em ' + esc(String(cache.atualizadoEm || '').slice(0, 16).replace('T', ' ')) + ').' +
+          (cache.valores.length < Math.round(NV.classificar.SERVICOS_CONHECIDOS.length * 0.6)
+            ? ' <b style="color:#fbbf24">Parece incompleta</b> — a referência tem ' +
+              NV.classificar.SERVICOS_CONHECIDOS.length + '. Releia a lista com um chamado aberto.'
+            : '')
         : 'Nenhuma lista lida ainda — use "Conferir tela" com um chamado aberto, ou o botão abaixo.') +
       '</p>' +
       '<button class="acao secundaria" data-ler-servicos>Ler a lista da tela agora</button>' +

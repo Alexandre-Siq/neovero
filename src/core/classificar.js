@@ -154,7 +154,12 @@
     { quando: ['atalho'], servico: 'ATALHO' },
     { quando: ['migrar arquivos', 'migracao de arquivos', 'backup'], servico: 'MIGRAÇÃO DE ARQUIVOS' },
     { quando: ['chamado externo', 'assistencia tecnica', 'fornecedor'], servico: 'ABERTURA DE CHAMADO EXTERNO' },
-    { quando: ['verificar equipamento', 'checar equipamento'], servico: 'VERIFICAÇÃO DE EQUIPAMENTO', peso: -1 }
+    { quando: ['verificar equipamento', 'checar equipamento'], servico: 'VERIFICAÇÃO DE EQUIPAMENTO', peso: -1 },
+    /* Pedidos de mudança no sistema (MV/PEP), que chegam como texto longo de comitê/setor. */
+    { quando: ['nova aba', 'nova tela', 'novo campo', 'adicionar campo', 'nova funcionalidade'], servico: 'DESENVOLVIMENTO DE TELAS MVPEP' },
+    { quando: ['novo relatorio', 'relatorio personalizado', 'relatorio customizado'], servico: 'DESENVOLVIMENTO DE RELATÓRIOS PERSONALIZADOS MV' },
+    { quando: ['levantamento', 'estudo de viabilidade'], servico: 'ESTUDO/LEVANTAMENTO PARA PROJETO' },
+    { quando: ['possibilidade de', 'sugestao de melhoria', 'avaliar a possibilidade'], servico: 'ANALISE DE SISTEMA', peso: -1 }
   ];
 
   const STOPWORDS = [

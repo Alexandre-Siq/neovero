@@ -175,6 +175,112 @@
     return false;
   };
 
+  /*
+   * Elemento que realmente rola dentro do painel de opções. Em DevExpress o
+   * container rolável costuma ser um ancestral da lista (.dx-scrollable-container),
+   * por isso procura no painel, nos descendentes e em alguns ancestrais.
+   */
+  function acharRolavel(painel) {
+    const candidatos = [];
+    const avaliar = function (el) {
+      if (!el || el.nodeType !== 1) return;
+      if (el.scrollHeight - el.clientHeight > 8) candidatos.push(el);
+    };
+    avaliar(painel);
+    Array.prototype.slice.call(painel.querySelectorAll('*'), 0, 400).forEach(avaliar);
+    let ancestral = painel.parentElement;
+    for (let i = 0; i < 4 && ancestral; i += 1) {
+      avaliar(ancestral);
+      ancestral = ancestral.parentElement;
+    }
+    candidatos.sort(function (a, b) {
+      return b.scrollHeight - b.clientHeight - (a.scrollHeight - a.clientHeight);
+    });
+    return candidatos[0] || null;
+  }
+  campos.acharRolavel = acharRolavel;
+
+  /*
+   * Varre um painel de opções rolando até o fim (ou até achar `alvo`).
+   *
+   * Listas longas — o combo "Serviço" do Neovero tem dezenas de itens — renderizam
+   * apenas a janela visível. Sem rolar, só os primeiros itens são vistos: era o que
+   * fazia a classificação considerar meia lista e a seleção não achar uma opção
+   * que existe.
+   *
+   * Devolve { opcoes, item, rolou, passos }. Quando `alvo` é encontrado, a rolagem
+   * NÃO volta ao topo, porque o elemento precisa continuar renderizado para o clique.
+   */
+  campos.varrerOpcoes = async function (painel, options) {
+    const opts = options || {};
+    const tempos = NV.config.obter().tempos;
+    const espera = opts.espera || Math.max(80, tempos.intervalo);
+    const mapa = new Map();
+
+    const acrescentar = function () {
+      const atuais = opcoesDe(painel);
+      atuais.forEach(function (o) {
+        const chave = text.normalize(o.texto);
+        if (chave && !mapa.has(chave)) mapa.set(chave, o.texto);
+      });
+      return atuais;
+    };
+
+    const procurar = function (atuais) {
+      if (!opts.alvo) return null;
+      return text.pickBest(atuais, opts.alvo, { getText: (o) => o.texto, min: opts.min || 0.8 });
+    };
+
+    let atuais = acrescentar();
+    let achado = procurar(atuais);
+    const resposta = function (rolou, passos) {
+      return { opcoes: Array.from(mapa.values()), item: achado, rolou: rolou, passos: passos };
+    };
+    if (achado) return resposta(false, 0);
+
+    const rolavel = acharRolavel(painel);
+    if (!rolavel) return resposta(false, 0);
+
+    const topoOriginal = rolavel.scrollTop;
+    let semNovos = 0;
+    let passos = 0;
+
+    for (let i = 0; i < 80; i += 1) {
+      const quantidadeAntes = mapa.size;
+      const topoAntes = rolavel.scrollTop;
+      const passo = Math.max(60, Math.floor(rolavel.clientHeight * 0.8));
+
+      rolavel.scrollTop = topoAntes + passo;
+      dom.disparar(rolavel, 'scroll');
+      if (rolavel.scrollTop === topoAntes) {
+        /* Rolagem simulada por transform (dxScrollable): responde a wheel. */
+        dom.disparar(painel, 'wheel', { deltaY: passo });
+      }
+      await async.sleep(espera);
+      passos += 1;
+
+      atuais = acrescentar();
+      achado = procurar(atuais);
+      if (achado) return resposta(true, passos);
+
+      const semMovimento = rolavel.scrollTop === topoAntes;
+      const noFim = rolavel.scrollTop + rolavel.clientHeight >= rolavel.scrollHeight - 2;
+      if (mapa.size === quantidadeAntes) semNovos += 1;
+      else semNovos = 0;
+      if (noFim && semNovos >= 1) break;
+      if (semNovos >= 3) break;
+      if (semMovimento && semNovos >= 2) break;
+    }
+
+    rolavel.scrollTop = topoOriginal;
+    dom.disparar(rolavel, 'scroll');
+    return resposta(true, passos);
+  };
+
+  campos.coletarTodasAsOpcoes = function (painel, options) {
+    return campos.varrerOpcoes(painel, options || {});
+  };
+
   /* Lista as opções disponíveis sem selecionar nada (usado no "Conferir tela"). */
   campos.listarOpcoes = async function (el, options) {
     const opts = options || {};
@@ -195,11 +301,14 @@
     }
 
     const aberto = await campos.abrirPainel(el, { rotulo: opts.rotulo });
-    const opcoes = opcoesDe(aberto.painel).map(function (o) {
-      return o.texto;
-    });
+    const coleta = await campos.varrerOpcoes(aberto.painel, { espera: opts.espera });
     const fechou = await campos.garantirPainelFechado(el, aberto.painel);
-    return responder(opcoes, fechou);
+    NV.log.info('Opções lidas de ' + (opts.rotulo || 'combo'), {
+      quantidade: coleta.opcoes.length,
+      rolou: coleta.rolou,
+      passos: coleta.passos
+    });
+    return responder(coleta.opcoes, fechou);
   };
 
   /*
@@ -234,22 +343,29 @@
     const aberto = await campos.abrirPainel(el, { rotulo: rotulo, filtro: valor });
     let painel = aberto.painel;
 
-    let melhor = text.pickBest(opcoesDe(painel), valor, { getText: (o) => o.texto, min: 0.8 });
+    /* Procura na janela renderizada e, se preciso, rolando a lista até achar. */
+    const varredura = await campos.varrerOpcoes(painel, { alvo: valor });
+    let melhor = varredura.item;
+    let vistas = varredura.opcoes;
 
+    /* Último recurso: digitar para o próprio combo filtrar. */
     if (!melhor && el.tagName === 'INPUT') {
       await dom.digitar(el, String(valor).slice(0, 12));
       await async.sleep(250);
       const painel2 = aberto.reavaliar();
-      melhor = text.pickBest(opcoesDe(painel2), valor, { getText: (o) => o.texto, min: 0.8 });
-      if (melhor) painel = painel2;
+      const filtrada = await campos.varrerOpcoes(painel2, { alvo: valor });
+      if (filtrada.item) {
+        melhor = filtrada.item;
+        painel = painel2;
+      }
+      if (filtrada.opcoes.length) vistas = filtrada.opcoes;
     }
 
     if (!melhor) {
-      const disponiveis = opcoesDe(painel).map((o) => o.texto).slice(0, 40);
       await campos.garantirPainelFechado(el, painel);
       throw new async.PassoError('Opção não encontrada em ' + rotulo + ': “' + valor + '”', {
         rotulo: rotulo,
-        disponiveis: disponiveis
+        disponiveis: vistas.slice(0, 60)
       });
     }
 

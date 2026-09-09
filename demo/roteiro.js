@@ -5,7 +5,8 @@
 (function () {
   'use strict';
 
-  window.AppFalso.montar({ numero: '202602691' });
+  /* servicoVirtual reproduz o combo rolável do Neovero, que renderiza só a janela visível. */
+window.AppFalso.montar({ numero: '202602691', servicoVirtual: true });
 
   const caixa = document.createElement('div');
   caixa.setAttribute('data-nv-ui', 'roteiro');
@@ -42,7 +43,8 @@
     caixa.remove();
   });
   caixa.querySelector('[data-recomecar]').addEventListener('click', function () {
-    window.AppFalso.montar({ numero: '202602691' });
+    /* servicoVirtual reproduz o combo rolável do Neovero, que renderiza só a janela visível. */
+window.AppFalso.montar({ numero: '202602691', servicoVirtual: true });
   });
 
   document.body.appendChild(caixa);

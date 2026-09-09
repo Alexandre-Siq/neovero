@@ -248,6 +248,9 @@
     linhas.push('OS em foco: ' + (r.numeroOs || 'não identificada') + ' · abertura: ' + (r.aberturaOs || 'não lida'));
     linhas.push('Modal abriu: ' + (r.modalAberto ? 'sim' : 'não') + (r.modalAberto ? ' · fechou: ' + (r.modalFechado ? 'sim' : 'não') : ''));
     linhas.push('Descrição lida: ' + (r.descricao ? '“' + r.descricao + '”' : 'NÃO LIDA'));
+    if (r.servicosLidos != null) {
+      linhas.push('Serviços lidos do combo: ' + r.servicosLidos + ' · base usada na classificação: ' + (r.baseDaClassificacao || 0));
+    }
     if (r.classificacao) {
       const c = r.classificacao;
       linhas.push(

@@ -684,6 +684,8 @@
       evento = new janela.KeyboardEvent(tipo, Object.assign({ bubbles: true, cancelable: true }, extra || {}));
     } else if (/^(mouse|click|dblclick|pointer)/.test(tipo)) {
       evento = new janela.MouseEvent(tipo, Object.assign({ bubbles: true, cancelable: true, view: janela }, extra || {}));
+    } else if (tipo === 'wheel' && janela.WheelEvent) {
+      evento = new janela.WheelEvent(tipo, Object.assign({ bubbles: true, cancelable: true, view: janela }, extra || {}));
     } else {
       evento = new janela.Event(tipo, { bubbles: true });
     }
@@ -1444,7 +1446,12 @@
     { quando: ['atalho'], servico: 'ATALHO' },
     { quando: ['migrar arquivos', 'migracao de arquivos', 'backup'], servico: 'MIGRAÇÃO DE ARQUIVOS' },
     { quando: ['chamado externo', 'assistencia tecnica', 'fornecedor'], servico: 'ABERTURA DE CHAMADO EXTERNO' },
-    { quando: ['verificar equipamento', 'checar equipamento'], servico: 'VERIFICAÇÃO DE EQUIPAMENTO', peso: -1 }
+    { quando: ['verificar equipamento', 'checar equipamento'], servico: 'VERIFICAÇÃO DE EQUIPAMENTO', peso: -1 },
+    /* Pedidos de mudança no sistema (MV/PEP), que chegam como texto longo de comitê/setor. */
+    { quando: ['nova aba', 'nova tela', 'novo campo', 'adicionar campo', 'nova funcionalidade'], servico: 'DESENVOLVIMENTO DE TELAS MVPEP' },
+    { quando: ['novo relatorio', 'relatorio personalizado', 'relatorio customizado'], servico: 'DESENVOLVIMENTO DE RELATÓRIOS PERSONALIZADOS MV' },
+    { quando: ['levantamento', 'estudo de viabilidade'], servico: 'ESTUDO/LEVANTAMENTO PARA PROJETO' },
+    { quando: ['possibilidade de', 'sugestao de melhoria', 'avaliar a possibilidade'], servico: 'ANALISE DE SISTEMA', peso: -1 }
   ];
 
   const STOPWORDS = [
@@ -2225,6 +2232,112 @@
     return false;
   };
 
+  /*
+   * Elemento que realmente rola dentro do painel de opções. Em DevExpress o
+   * container rolável costuma ser um ancestral da lista (.dx-scrollable-container),
+   * por isso procura no painel, nos descendentes e em alguns ancestrais.
+   */
+  function acharRolavel(painel) {
+    const candidatos = [];
+    const avaliar = function (el) {
+      if (!el || el.nodeType !== 1) return;
+      if (el.scrollHeight - el.clientHeight > 8) candidatos.push(el);
+    };
+    avaliar(painel);
+    Array.prototype.slice.call(painel.querySelectorAll('*'), 0, 400).forEach(avaliar);
+    let ancestral = painel.parentElement;
+    for (let i = 0; i < 4 && ancestral; i += 1) {
+      avaliar(ancestral);
+      ancestral = ancestral.parentElement;
+    }
+    candidatos.sort(function (a, b) {
+      return b.scrollHeight - b.clientHeight - (a.scrollHeight - a.clientHeight);
+    });
+    return candidatos[0] || null;
+  }
+  campos.acharRolavel = acharRolavel;
+
+  /*
+   * Varre um painel de opções rolando até o fim (ou até achar `alvo`).
+   *
+   * Listas longas — o combo "Serviço" do Neovero tem dezenas de itens — renderizam
+   * apenas a janela visível. Sem rolar, só os primeiros itens são vistos: era o que
+   * fazia a classificação considerar meia lista e a seleção não achar uma opção
+   * que existe.
+   *
+   * Devolve { opcoes, item, rolou, passos }. Quando `alvo` é encontrado, a rolagem
+   * NÃO volta ao topo, porque o elemento precisa continuar renderizado para o clique.
+   */
+  campos.varrerOpcoes = async function (painel, options) {
+    const opts = options || {};
+    const tempos = NV.config.obter().tempos;
+    const espera = opts.espera || Math.max(80, tempos.intervalo);
+    const mapa = new Map();
+
+    const acrescentar = function () {
+      const atuais = opcoesDe(painel);
+      atuais.forEach(function (o) {
+        const chave = text.normalize(o.texto);
+        if (chave && !mapa.has(chave)) mapa.set(chave, o.texto);
+      });
+      return atuais;
+    };
+
+    const procurar = function (atuais) {
+      if (!opts.alvo) return null;
+      return text.pickBest(atuais, opts.alvo, { getText: (o) => o.texto, min: opts.min || 0.8 });
+    };
+
+    let atuais = acrescentar();
+    let achado = procurar(atuais);
+    const resposta = function (rolou, passos) {
+      return { opcoes: Array.from(mapa.values()), item: achado, rolou: rolou, passos: passos };
+    };
+    if (achado) return resposta(false, 0);
+
+    const rolavel = acharRolavel(painel);
+    if (!rolavel) return resposta(false, 0);
+
+    const topoOriginal = rolavel.scrollTop;
+    let semNovos = 0;
+    let passos = 0;
+
+    for (let i = 0; i < 80; i += 1) {
+      const quantidadeAntes = mapa.size;
+      const topoAntes = rolavel.scrollTop;
+      const passo = Math.max(60, Math.floor(rolavel.clientHeight * 0.8));
+
+      rolavel.scrollTop = topoAntes + passo;
+      dom.disparar(rolavel, 'scroll');
+      if (rolavel.scrollTop === topoAntes) {
+        /* Rolagem simulada por transform (dxScrollable): responde a wheel. */
+        dom.disparar(painel, 'wheel', { deltaY: passo });
+      }
+      await async.sleep(espera);
+      passos += 1;
+
+      atuais = acrescentar();
+      achado = procurar(atuais);
+      if (achado) return resposta(true, passos);
+
+      const semMovimento = rolavel.scrollTop === topoAntes;
+      const noFim = rolavel.scrollTop + rolavel.clientHeight >= rolavel.scrollHeight - 2;
+      if (mapa.size === quantidadeAntes) semNovos += 1;
+      else semNovos = 0;
+      if (noFim && semNovos >= 1) break;
+      if (semNovos >= 3) break;
+      if (semMovimento && semNovos >= 2) break;
+    }
+
+    rolavel.scrollTop = topoOriginal;
+    dom.disparar(rolavel, 'scroll');
+    return resposta(true, passos);
+  };
+
+  campos.coletarTodasAsOpcoes = function (painel, options) {
+    return campos.varrerOpcoes(painel, options || {});
+  };
+
   /* Lista as opções disponíveis sem selecionar nada (usado no "Conferir tela"). */
   campos.listarOpcoes = async function (el, options) {
     const opts = options || {};
@@ -2245,11 +2358,14 @@
     }
 
     const aberto = await campos.abrirPainel(el, { rotulo: opts.rotulo });
-    const opcoes = opcoesDe(aberto.painel).map(function (o) {
-      return o.texto;
-    });
+    const coleta = await campos.varrerOpcoes(aberto.painel, { espera: opts.espera });
     const fechou = await campos.garantirPainelFechado(el, aberto.painel);
-    return responder(opcoes, fechou);
+    NV.log.info('Opções lidas de ' + (opts.rotulo || 'combo'), {
+      quantidade: coleta.opcoes.length,
+      rolou: coleta.rolou,
+      passos: coleta.passos
+    });
+    return responder(coleta.opcoes, fechou);
   };
 
   /*
@@ -2284,22 +2400,29 @@
     const aberto = await campos.abrirPainel(el, { rotulo: rotulo, filtro: valor });
     let painel = aberto.painel;
 
-    let melhor = text.pickBest(opcoesDe(painel), valor, { getText: (o) => o.texto, min: 0.8 });
+    /* Procura na janela renderizada e, se preciso, rolando a lista até achar. */
+    const varredura = await campos.varrerOpcoes(painel, { alvo: valor });
+    let melhor = varredura.item;
+    let vistas = varredura.opcoes;
 
+    /* Último recurso: digitar para o próprio combo filtrar. */
     if (!melhor && el.tagName === 'INPUT') {
       await dom.digitar(el, String(valor).slice(0, 12));
       await async.sleep(250);
       const painel2 = aberto.reavaliar();
-      melhor = text.pickBest(opcoesDe(painel2), valor, { getText: (o) => o.texto, min: 0.8 });
-      if (melhor) painel = painel2;
+      const filtrada = await campos.varrerOpcoes(painel2, { alvo: valor });
+      if (filtrada.item) {
+        melhor = filtrada.item;
+        painel = painel2;
+      }
+      if (filtrada.opcoes.length) vistas = filtrada.opcoes;
     }
 
     if (!melhor) {
-      const disponiveis = opcoesDe(painel).map((o) => o.texto).slice(0, 40);
       await campos.garantirPainelFechado(el, painel);
       throw new async.PassoError('Opção não encontrada em ' + rotulo + ': “' + valor + '”', {
         rotulo: rotulo,
-        disponiveis: disponiveis
+        disponiveis: vistas.slice(0, 60)
       });
     }
 
@@ -2498,6 +2621,21 @@
    * Lista de serviços: usa o cache para não abrir o combo em todo fechamento,
    * e relê da tela quando o cache está vazio ou quando pedimos explicitamente.
    */
+  /* Une listas sem repetir, preferindo a grafia lida da tela. */
+  function unirServicos(daTela, referencia) {
+    const mapa = new Map();
+    (daTela || []).forEach(function (o) {
+      const chave = text.normalize(o);
+      if (chave) mapa.set(chave, o);
+    });
+    (referencia || []).forEach(function (o) {
+      const chave = text.normalize(o);
+      if (chave && !mapa.has(chave)) mapa.set(chave, o);
+    });
+    return Array.from(mapa.values());
+  }
+  fluxo.unirServicos = unirServicos;
+
   fluxo.opcoesDeServico = async function (modal, options) {
     const opts = options || {};
     if (!opts.forcarLeitura) {
@@ -2506,9 +2644,26 @@
     }
     const el = localizar.campoServico(modal);
     if (!el) throw new async.PassoError('Campo "Serviço" não encontrado para ler as opções');
-    const lidas = await campos.listarOpcoes(el, { rotulo: 'Serviço' });
-    if (lidas && lidas.length) NV.config.definirCacheServicos(lidas);
-    return { opcoes: lidas || [], origem: 'tela' };
+    const lidas = (await campos.listarOpcoes(el, { rotulo: 'Serviço' })) || [];
+
+    /*
+     * Rede de segurança: se a lista veio muito menor que a de referência, a leitura
+     * provavelmente pegou só a janela visível do combo. Classificar com meia lista
+     * escolhe o serviço errado calado, então completamos e avisamos.
+     */
+    const referencia = NV.classificar.SERVICOS_CONHECIDOS;
+    const parcial = lidas.length > 0 && lidas.length < Math.round(referencia.length * 0.6);
+    const finais = parcial ? unirServicos(lidas, referencia) : lidas;
+
+    if (parcial) {
+      NV.log.aviso('A lista de serviços lida parece incompleta; completei com a lista de referência', {
+        lidos: lidas.length,
+        referencia: referencia.length,
+        total: finais.length
+      });
+    }
+    if (finais.length) NV.config.definirCacheServicos(finais);
+    return { opcoes: finais, origem: 'tela', lidos: lidas.length, parcial: parcial };
   };
 
   /*
@@ -2786,6 +2941,16 @@
         if (!saida.painelFechado) {
           relatorio.problemas.push('A lista de "' + combos[i][1] + '" ficou aberta na tela — feche clicando fora.');
         }
+        if (chave === 'servico') {
+          const referencia = NV.classificar.SERVICOS_CONHECIDOS.length;
+          relatorio.servicosLidos = saida.opcoes.length;
+          if (saida.opcoes.length < Math.round(referencia * 0.6)) {
+            relatorio.problemas.push(
+              'Só ' + saida.opcoes.length + ' serviços foram lidos do combo (a referência tem ' + referencia +
+                '). A lista provavelmente não rolou até o fim — mande este relatório.'
+            );
+          }
+        }
       } catch (erro) {
         relatorio.opcoes[chave] = null;
         relatorio.problemas.push('Não consegui abrir a lista de "' + combos[i][1] + '": ' + String(erro.message || erro));
@@ -2830,14 +2995,20 @@
 
     /* Mostra como a descrição seria classificada, para o usuário ajustar as regras. */
     if (relatorio.descricao && (relatorio.opcoes.servico || []).length) {
-      relatorio.classificacao = NV.classificar.sugerir(relatorio.descricao, relatorio.opcoes.servico, {
+      const referencia = NV.classificar.SERVICOS_CONHECIDOS;
+      const baseParaClassificar =
+        relatorio.opcoes.servico.length < Math.round(referencia.length * 0.6)
+          ? unirServicos(relatorio.opcoes.servico, referencia)
+          : relatorio.opcoes.servico;
+      relatorio.baseDaClassificacao = baseParaClassificar.length;
+      relatorio.classificacao = NV.classificar.sugerir(relatorio.descricao, baseParaClassificar, {
         regras: NV.config.regrasDeClassificacao(),
         minimo: cfg.classificacao.minimoConfianca
       });
       if (!relatorio.classificacao.escolhido) {
         relatorio.problemas.push('A descrição não bateu com nenhum serviço: ajuste as regras em ⚙ → Classificação.');
       }
-      const regrasQuebradas = NV.classificar.conferirRegras(NV.config.regrasDeClassificacao(), relatorio.opcoes.servico);
+      const regrasQuebradas = NV.classificar.conferirRegras(NV.config.regrasDeClassificacao(), baseParaClassificar);
       if (regrasQuebradas.length) {
         relatorio.regrasInvalidas = regrasQuebradas;
         relatorio.problemas.push(
@@ -3587,6 +3758,9 @@
     linhas.push('OS em foco: ' + (r.numeroOs || 'não identificada') + ' · abertura: ' + (r.aberturaOs || 'não lida'));
     linhas.push('Modal abriu: ' + (r.modalAberto ? 'sim' : 'não') + (r.modalAberto ? ' · fechou: ' + (r.modalFechado ? 'sim' : 'não') : ''));
     linhas.push('Descrição lida: ' + (r.descricao ? '“' + r.descricao + '”' : 'NÃO LIDA'));
+    if (r.servicosLidos != null) {
+      linhas.push('Serviços lidos do combo: ' + r.servicosLidos + ' · base usada na classificação: ' + (r.baseDaClassificacao || 0));
+    }
     if (r.classificacao) {
       const c = r.classificacao;
       linhas.push(
@@ -4262,6 +4436,10 @@
           })
           .join('') +
         '</ul>' +
+        '<fieldset style="margin-top:10px"><legend>Todos os serviços (' + (info.opcoes || []).length + ')</legend>' +
+        '<input type="text" data-busca placeholder="Buscar na lista completa…">' +
+        '<ul class="lista" data-todos style="max-height:200px"></ul>' +
+        '</fieldset>' +
         (palavra
           ? '<label class="check" style="margin-top:10px"><input type="checkbox" data-aprender checked>' +
             '<span>Criar regra para a palavra <input type="text" data-palavra value="' + esc(palavra) +
@@ -4276,6 +4454,24 @@
           (info.preset.servico ? '<button class="acao secundaria" data-preset>Usar o do preset</button>' : '') +
           '<button class="acao" data-sugerido>Usar a sugestão</button>'
       );
+
+      /* Lista completa com busca: a resposta certa pode não estar entre as 6 melhores. */
+      const listaTodos = sobre.querySelector('[data-todos]');
+      const busca = sobre.querySelector('[data-busca]');
+      const renderTodos = function () {
+        const filtro = NV.text.normalize(busca ? busca.value : '');
+        const itens = (info.opcoes || []).filter(function (o) {
+          return !filtro || NV.text.normalize(o).indexOf(filtro) >= 0;
+        });
+        listaTodos.innerHTML = itens
+          .slice(0, 60)
+          .map(function (o) {
+            return '<li><span class="nome">' + esc(o) + '</span><button class="acao" data-opcao="' + esc(o) + '">Usar</button></li>';
+          })
+          .join('') || '<li><span class="nome aviso-inline">Nada encontrado.</span></li>';
+      };
+      if (listaTodos) renderTodos();
+      if (busca) busca.addEventListener('input', renderTodos);
 
       const responder = function (valor) {
         /* Só aprende quando o usuário corrigiu a sugestão. */
@@ -4532,6 +4728,8 @@
       '</fieldset>' +
       (relatorio.classificacao
         ? '<fieldset><legend>Classificação do serviço</legend>' +
+          '<p class="aviso-inline">Base usada: <b>' + (relatorio.baseDaClassificacao || 0) + '</b> serviços' +
+          (relatorio.servicosLidos != null ? ' (lidos do combo: ' + relatorio.servicosLidos + ')' : '') + '</p>' +
           (relatorio.classificacao.escolhido
             ? '<p class="aviso-inline">→ <b>' + esc(relatorio.classificacao.escolhido) + '</b> · ' +
               Math.round(relatorio.classificacao.confianca * 100) + '% · ' + esc(relatorio.classificacao.origem) +
@@ -4931,7 +5129,11 @@
       '<fieldset><legend>Lista de serviços da produção</legend>' +
       '<p class="aviso-inline">' +
       (cache.valores && cache.valores.length
-        ? cache.valores.length + ' serviços em cache (lidos em ' + esc(String(cache.atualizadoEm || '').slice(0, 16).replace('T', ' ')) + ').'
+        ? cache.valores.length + ' serviços em cache (lidos em ' + esc(String(cache.atualizadoEm || '').slice(0, 16).replace('T', ' ')) + ').' +
+          (cache.valores.length < Math.round(NV.classificar.SERVICOS_CONHECIDOS.length * 0.6)
+            ? ' <b style="color:#fbbf24">Parece incompleta</b> — a referência tem ' +
+              NV.classificar.SERVICOS_CONHECIDOS.length + '. Releia a lista com um chamado aberto.'
+            : '')
         : 'Nenhuma lista lida ainda — use "Conferir tela" com um chamado aberto, ou o botão abaixo.') +
       '</p>' +
       '<button class="acao secundaria" data-ler-servicos>Ler a lista da tela agora</button>' +

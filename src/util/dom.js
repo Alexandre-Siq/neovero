@@ -391,6 +391,8 @@
       evento = new janela.KeyboardEvent(tipo, Object.assign({ bubbles: true, cancelable: true }, extra || {}));
     } else if (/^(mouse|click|dblclick|pointer)/.test(tipo)) {
       evento = new janela.MouseEvent(tipo, Object.assign({ bubbles: true, cancelable: true, view: janela }, extra || {}));
+    } else if (tipo === 'wheel' && janela.WheelEvent) {
+      evento = new janela.WheelEvent(tipo, Object.assign({ bubbles: true, cancelable: true, view: janela }, extra || {}));
     } else {
       evento = new janela.Event(tipo, { bubbles: true });
     }

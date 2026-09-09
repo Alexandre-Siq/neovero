@@ -397,6 +397,37 @@
     return 'botão flutuante segue a linha sob o mouse, sem alterar o DOM da aplicação';
   });
 
+  teste('Lê a lista inteira de um combo rolável (não só a janela visível)', async function () {
+    configurarPadrao();
+    const servicos = NV().classificar.SERVICOS_CONHECIDOS;
+    window.AppFalso.montar({
+      numero: '202602691',
+      servicoVirtual: true,
+      opcoesServico: servicos,
+      descricao: 'computador da enfermagem nao esta ligando'
+    });
+
+    const janela = NV().localizar.janelaOs();
+    const modal = await NV().fluxo.abrirModalOcorrencia(janela, NV().config.obter().tempos);
+    const campo = NV().localizar.campoServico(modal);
+
+    /* Sem rolar, o combo mostra poucos itens. */
+    const aberto = await NV().campos.abrirPainel(campo, { rotulo: 'Serviço' });
+    const visiveis = NV().campos.opcoesDe(aberto.painel).length;
+    afirmar(visiveis < 20, 'a lista deveria renderizar só a janela visível, veio ' + visiveis);
+    await NV().campos.garantirPainelFechado(campo, aberto.painel);
+
+    const lidas = await NV().campos.listarOpcoes(campo, { rotulo: 'Serviço' });
+    igual(lidas.length, servicos.length, 'deveria ler todos os serviços rolando a lista');
+    afirmar(lidas.indexOf('VERIFICAÇÃO DE EQUIPAMENTO') >= 0, 'o último item da lista deveria ser lido');
+
+    const cancelar = NV().dom.acharBotao(modal, ['Cancelar'], { min: 0.98 });
+    if (cancelar) NV().dom.clicar(cancelar);
+    await esperar(200);
+
+    return 'leu ' + lidas.length + ' serviços (a janela visível mostrava ' + visiveis + ')';
+  });
+
   teste('Funciona com a OS dentro de um iframe (janelas MDI do ASP.NET)', async function () {
     configurarPadrao();
     const app = window.AppFalso.emIframe({ numero: '202602691' });
