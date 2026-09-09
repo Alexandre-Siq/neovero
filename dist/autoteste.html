@@ -759,6 +759,13 @@
     }, options);
   };
 
+  /* setInterval que não impede o processo de encerrar em ambiente Node (testes). */
+  async.intervalo = function (fn, ms) {
+    const id = setInterval(fn, ms);
+    if (id && typeof id.unref === 'function') id.unref();
+    return id;
+  };
+
   async.tentar = async function (fn, options) {
     const opts = options || {};
     const tentativas = Math.max(1, opts.tentativas || 3);
@@ -962,6 +969,37 @@
   dom.area = function (el) {
     const r = el.getBoundingClientRect();
     return r.width * r.height;
+  };
+
+  /*
+   * Elemento sob o ponteiro, entrando em iframes de mesma origem.
+   * Devolve null em ambientes sem layout (jsdom não implementa elementFromPoint).
+   */
+  dom.elementoNoPonto = function (x, y) {
+    let el;
+    try {
+      el = document.elementFromPoint(x, y);
+    } catch (erro) {
+      return null;
+    }
+    let deslocX = 0;
+    let deslocY = 0;
+    for (let n = 0; n < 3 && el && (el.tagName === 'IFRAME' || el.tagName === 'FRAME'); n += 1) {
+      const interno = dom.documentoDoFrame(el);
+      if (!interno) break;
+      const r = el.getBoundingClientRect();
+      deslocX += r.left;
+      deslocY += r.top;
+      let dentro = null;
+      try {
+        dentro = interno.elementFromPoint(x - deslocX, y - deslocY);
+      } catch (erro) {
+        dentro = null;
+      }
+      if (!dentro) break;
+      el = dentro;
+    }
+    return el;
   };
 
   /* Coordenadas na janela do topo, somando o deslocamento dos iframes. */
@@ -1234,9 +1272,7 @@
       });
     };
     registrar();
-    const temporizador = setInterval(registrar, 4000);
-    /* Em ambiente Node (testes) o timer não deve impedir o processo de encerrar. */
-    if (temporizador && typeof temporizador.unref === 'function') temporizador.unref();
+    const temporizador = NV.async.intervalo(registrar, 4000);
     return function desligar() {
       clearInterval(temporizador);
       dom.documentos().forEach(function (doc) {
@@ -1477,8 +1513,12 @@
     cacheServicos: { valores: [], atualizadoEm: null },
     atalhos: {
       fechar: 'Alt+F',
+      proximo: 'Alt+G',
       lote: 'Alt+Shift+F',
       painel: 'Alt+N'
+    },
+    fila: {
+      botaoNaLista: true
     },
     tempos: {
       elemento: 10000,
@@ -3655,6 +3695,142 @@
   NV.lote = lote;
 })((globalThis.NV = globalThis.NV || {}));
 
+/* ===== src/core/fila.js ===== */
+/*
+ * Fila de atendimento: fechar chamados a partir da lista do Monitor, sem abrir
+ * cada OS à mão. A ordem é a da própria lista; o que já foi processado nesta
+ * sessão é ignorado, porque a lista do Neovero pode levar um tempo para atualizar.
+ */
+(function (NV) {
+  'use strict';
+
+  const async = NV.async;
+  const fila = {};
+
+  const TTL_CACHE = 1500;
+  let cache = { em: 0, itens: [] };
+
+  fila.processados = new Set();
+  fila.ignorados = new Set();
+
+  fila.limparMemoria = function () {
+    fila.processados.clear();
+    fila.ignorados.clear();
+    cache = { em: 0, itens: [] };
+  };
+
+  /*
+   * Itens visíveis na lista. `cache` evita varrer o DOM a cada movimento do mouse
+   * (o botão que aparece sobre a linha consulta isso a todo instante).
+   */
+  fila.itens = function (options) {
+    const opts = options || {};
+    if (opts.cache !== false && Date.now() - cache.em < TTL_CACHE) return cache.itens;
+    cache = { em: Date.now(), itens: NV.localizar.itensDoMonitor() };
+    return cache.itens;
+  };
+
+  fila.pendentes = function (options) {
+    return fila.itens(options).filter(function (item) {
+      return !fila.processados.has(item.numero) && !fila.ignorados.has(item.numero);
+    });
+  };
+
+  fila.contar = function (options) {
+    return fila.pendentes(options).length;
+  };
+
+  fila.porNumero = function (numero, options) {
+    return (
+      fila.itens(options).filter(function (item) {
+        return item.numero === numero;
+      })[0] || null
+    );
+  };
+
+  /* Fecha uma OS específica: abre pela lista, roda o fluxo e registra o resultado. */
+  fila.fecharUm = async function (numero, options) {
+    const opts = options || {};
+    const cfg = NV.config.obter();
+    let resultado;
+    try {
+      await NV.lote.abrirOs(numero, cfg.tempos);
+      await async.sleep(300);
+      resultado = await NV.fluxo.fecharOS(opts);
+    } catch (erro) {
+      resultado = { ok: false, erro: String(erro.message || erro) };
+    }
+    resultado.numeroOs = resultado.numeroOs || numero;
+
+    if (resultado.ok && resultado.fechada) fila.processados.add(numero);
+    else if (!resultado.cancelado) fila.ignorados.add(numero);
+    cache = { em: 0, itens: [] };
+
+    NV.log.info('Fila: OS ' + numero + (resultado.ok ? ' fechada' : ' não fechada'), {
+      erro: resultado.erro || null,
+      passo: resultado.passo || null
+    });
+    return resultado;
+  };
+
+  fila.proximo = function () {
+    return fila.pendentes({ cache: false })[0] || null;
+  };
+
+  fila.fecharProximo = async function (options) {
+    const item = fila.proximo();
+    if (!item) return { ok: false, vazia: true, erro: 'Nenhuma OS pendente na lista' };
+    return fila.fecharUm(item.numero, options);
+  };
+
+  /*
+   * Sequência contínua: fecha um após o outro até a lista esvaziar, o limite ser
+   * atingido, dar erro (quando configurado para parar) ou o usuário cancelar.
+   * options: { aoProgresso, sinal, limite, ...opções do fluxo }
+   */
+  fila.fecharEmSequencia = async function (options) {
+    const opts = options || {};
+    const cfg = NV.config.obter();
+    const sinal = opts.sinal || NV.fluxo.criarSinal();
+    const limite = Math.max(1, opts.limite || cfg.lote.maximo);
+    const resultados = [];
+
+    for (let i = 0; i < limite; i += 1) {
+      if (sinal.cancelado) break;
+      const item = fila.proximo();
+      if (!item) break;
+      if (opts.aoProgresso) {
+        opts.aoProgresso({
+          tipo: 'os',
+          numero: item.numero,
+          indice: resultados.length + 1,
+          total: Math.min(limite, resultados.length + 1 + fila.contar({ cache: false })),
+          fase: 'fila'
+        });
+      }
+      const resultado = await fila.fecharUm(item.numero, Object.assign({}, opts, { sinal: sinal }));
+      resultados.push(resultado);
+      if (resultado.cancelado) break;
+      if (!resultado.ok && cfg.lote.pararNoPrimeiroErro) break;
+      if (fila.proximo()) await async.sleep(cfg.lote.esperaEntreOs);
+    }
+
+    return {
+      processadas: resultados.length,
+      sucesso: resultados.filter(function (r) {
+        return r.ok && r.fechada;
+      }).length,
+      falhas: resultados.filter(function (r) {
+        return !r.ok;
+      }),
+      restantes: fila.contar({ cache: false }),
+      resultados: resultados
+    };
+  };
+
+  NV.fila = fila;
+})((globalThis.NV = globalThis.NV || {}));
+
 /* ===== src/core/diagnostico.js ===== */
 /*
  * Coletor de diagnóstico.
@@ -4125,23 +4301,7 @@
 
   let ativo = null;
 
-  /* Entra nos iframes de mesma origem: as janelas da OS podem estar dentro deles. */
-  function elementoNoPonto(x, y) {
-    let el = document.elementFromPoint(x, y);
-    let deslocX = 0;
-    let deslocY = 0;
-    for (let n = 0; n < 3 && el && (el.tagName === 'IFRAME' || el.tagName === 'FRAME'); n += 1) {
-      const interno = dom.documentoDoFrame(el);
-      if (!interno) break;
-      const r = el.getBoundingClientRect();
-      deslocX += r.left;
-      deslocY += r.top;
-      const dentro = interno.elementFromPoint(x - deslocX, y - deslocY);
-      if (!dentro) break;
-      el = dentro;
-    }
-    return el;
-  }
+  const elementoNoPonto = dom.elementoNoPonto;
 
   function criarCamada() {
     const camada = document.createElement('div');
@@ -4259,6 +4419,147 @@
   NV.aprender = aprender;
 })((globalThis.NV = globalThis.NV || {}));
 
+/* ===== src/ui/lista.js ===== */
+/*
+ * Botão "fechar" que aparece sobre a linha do Monitor de Atendimento quando o
+ * mouse passa por ela.
+ *
+ * De propósito não injeta nada no DOM da aplicação: o botão é um elemento flutuante
+ * nosso, posicionado sobre a linha. Assim nenhuma re-renderização do Neovero perde
+ * o botão nem tem o layout alterado.
+ */
+(function (NV) {
+  'use strict';
+
+  const dom = NV.dom;
+  const lista = {};
+
+  let host = null;
+  let botao = null;
+  let itemAtual = null;
+  let ultimoMovimento = 0;
+  let esconderEm = null;
+  let aoFechar = null;
+  let listeners = false;
+
+  function criarBotao() {
+    host = document.createElement('div');
+    host.setAttribute('data-nv-ui', 'lista');
+    document.body.appendChild(host);
+    const raiz = host.attachShadow({ mode: 'open' });
+
+    const estilo = document.createElement('style');
+    estilo.textContent = `
+      .botao {
+        position: fixed; z-index: 2147481000; display: none; align-items: center; gap: 5px;
+        background: #10b981; color: #06281f; border: 0; border-radius: 7px;
+        padding: 3px 9px; font: 700 11px/1.4 system-ui, "Segoe UI", sans-serif;
+        cursor: pointer; box-shadow: 0 3px 12px rgba(0,0,0,.45); white-space: nowrap;
+      }
+      .botao:hover { filter: brightness(1.08); }
+      .botao.ocupado { background: #7f1d1d; color: #fee2e2; cursor: progress; }
+    `;
+    raiz.appendChild(estilo);
+
+    botao = document.createElement('button');
+    botao.className = 'botao';
+    raiz.appendChild(botao);
+
+    botao.addEventListener('mouseenter', function () {
+      if (esconderEm) {
+        clearTimeout(esconderEm);
+        esconderEm = null;
+      }
+    });
+    botao.addEventListener('mouseleave', agendarEsconder);
+    botao.addEventListener('click', function (ev) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      if (!itemAtual || !aoFechar) return;
+      const numero = itemAtual.numero;
+      esconder();
+      aoFechar(numero);
+    });
+  }
+
+  function esconder() {
+    itemAtual = null;
+    if (botao) botao.style.display = 'none';
+  }
+
+  function agendarEsconder() {
+    if (esconderEm) clearTimeout(esconderEm);
+    esconderEm = setTimeout(esconder, 350);
+  }
+
+  function mostrarPara(item) {
+    itemAtual = item;
+    const r = dom.retanguloAbsoluto(item.el);
+    if (!r.width || !r.height) return esconder();
+    botao.textContent = '⚡ Fechar ' + item.numero;
+    botao.style.display = 'inline-flex';
+    const largura = botao.getBoundingClientRect().width || 110;
+    /* Encostado na borda direita da linha, sem sair da janela. */
+    const x = Math.max(4, Math.min(window.innerWidth - largura - 6, r.left + r.width - largura - 6));
+    botao.style.left = x + 'px';
+    botao.style.top = Math.max(2, r.top + r.height / 2 - 11) + 'px';
+    return undefined;
+  }
+
+  function aoMover(ev) {
+    if (!NV.config.obter().fila.botaoNaLista) return esconder();
+    /* 12 quadros por segundo bastam e mantêm o custo desprezível. */
+    const agora = Date.now();
+    if (agora - ultimoMovimento < 80) return undefined;
+    ultimoMovimento = agora;
+
+    const alvo = dom.elementoNoPonto(ev.clientX, ev.clientY);
+    if (!alvo || (alvo.closest && alvo.closest('[data-nv-ui]'))) return undefined;
+
+    const itens = NV.fila.pendentes({ cache: true });
+    for (let i = 0; i < itens.length; i += 1) {
+      const item = itens[i];
+      if (item.el === alvo || item.el.contains(alvo)) {
+        if (esconderEm) {
+          clearTimeout(esconderEm);
+          esconderEm = null;
+        }
+        if (!itemAtual || itemAtual.numero !== item.numero) mostrarPara(item);
+        return undefined;
+      }
+    }
+    if (itemAtual) agendarEsconder();
+    return undefined;
+  }
+
+  lista.definirOcupado = function (valor) {
+    if (!botao) return;
+    botao.classList.toggle('ocupado', !!valor);
+    if (valor) esconder();
+  };
+
+  lista.montado = function () {
+    return !!host && host.isConnected;
+  };
+
+  /* aoFecharOs: função que recebe o número da OS e executa o fechamento. */
+  lista.iniciar = function (aoFecharOs) {
+    aoFechar = aoFecharOs;
+    if (!lista.montado()) {
+      host = null;
+      criarBotao();
+    }
+    if (!listeners) {
+      dom.ouvirTodos('mousemove', aoMover, true);
+      dom.ouvirTodos('scroll', esconder, true);
+      listeners = true;
+    }
+    return lista;
+  };
+
+  NV.lista = lista;
+})((globalThis.NV = globalThis.NV || {}));
+
 /* ===== src/ui/painel.js ===== */
 /* Painel flutuante: preset ativo, botões de ação, configuração, log e lote. */
 (function (NV) {
@@ -4309,9 +4610,10 @@
     ocupado = valor;
     refs.btnFechar.textContent = valor ? 'Cancelar' : 'Fechar chamado';
     refs.btnFechar.classList.toggle('perigo', valor);
-    [refs.btnSimular, refs.btnOcorrencia, refs.btnLote, refs.btnConferir].forEach(function (b) {
+    [refs.btnSimular, refs.btnOcorrencia, refs.btnFila, refs.btnLote, refs.btnConferir].forEach(function (b) {
       if (b) b.disabled = valor;
     });
+    if (NV.lista) NV.lista.definirOcupado(valor);
   }
 
   function aoProgresso(evento) {
@@ -4501,6 +4803,156 @@
         '.<br>Confirmar o fechamento da Ordem de Serviço?',
       'Fechar OS'
     );
+  }
+
+  /* ---------------- fila ---------------- */
+
+  function atualizarContadorDaFila() {
+    if (!refs.btnFila) return;
+    let total = 0;
+    try {
+      total = NV.fila.contar({ cache: true });
+    } catch (erro) {
+      total = 0;
+    }
+    refs.btnFila.textContent = total ? 'Fila (' + total + ')' : 'Fila';
+  }
+
+  /* Fecha uma OS escolhida na lista, sem precisar abri-la antes. */
+  async function fecharDaLista(numero) {
+    if (ocupado) return null;
+    sinalAtual = NV.fluxo.criarSinal();
+    definirOcupado(true);
+    status('… abrindo a OS ' + numero, 'trabalhando');
+    try {
+      const resultado = await NV.fila.fecharUm(numero, {
+        preset: NV.config.presetAtivo(),
+        aoProgresso: aoProgresso,
+        sinal: sinalAtual,
+        aoConfirmar: confirmarFechamento,
+        aoEscolherServico: escolherServico
+      });
+      if (resultado.ok && resultado.fechada) status('✓ OS ' + numero + ' fechada', 'ok');
+      else if (resultado.cancelado) status('Cancelado');
+      else status('✗ OS ' + numero + ': ' + resumoDeErro(resultado), 'erro');
+      return resultado;
+    } finally {
+      definirOcupado(false);
+      sinalAtual = null;
+      atualizarContadorDaFila();
+    }
+  }
+
+  async function fecharProximoDaFila() {
+    const item = NV.fila.proximo();
+    if (!item) {
+      status('Nenhuma OS pendente na lista', 'erro');
+      return null;
+    }
+    return fecharDaLista(item.numero);
+  }
+
+  async function fecharFilaEmSequencia(confirmarCada) {
+    sinalAtual = NV.fluxo.criarSinal();
+    definirOcupado(true);
+    try {
+      const resumo = await NV.fila.fecharEmSequencia({
+        preset: NV.config.presetAtivo(),
+        aoProgresso: aoProgresso,
+        sinal: sinalAtual,
+        aoConfirmar: confirmarCada ? confirmarFechamento : null,
+        aoEscolherServico: escolherServico
+      });
+      status(
+        '✓ ' + resumo.sucesso + ' fechada(s)' +
+          (resumo.falhas.length ? ' · ' + resumo.falhas.length + ' falha(s), veja o Log' : '') +
+          (resumo.restantes ? ' · ' + resumo.restantes + ' na fila' : ' · fila vazia'),
+        resumo.falhas.length ? 'erro' : 'ok'
+      );
+      return resumo;
+    } finally {
+      definirOcupado(false);
+      sinalAtual = null;
+      atualizarContadorDaFila();
+    }
+  }
+
+  function abrirFila() {
+    const cfg = NV.config.obter();
+    const pendentes = NV.fila.pendentes({ cache: false });
+    const preset = NV.config.presetAtivo() || {};
+
+    const html =
+      '<div class="aviso-inline">Ordem da própria lista do Monitor. Fechar uma OS aqui dispensa ' +
+      'abri-la antes. O que falhar sai da fila para não travar a sequência.</div>' +
+      '<fieldset><legend>Sequência</legend>' +
+      '<p class="aviso-inline">Preset: <b>' + esc(preset.nome || '—') + '</b> · pendentes: <b>' + pendentes.length + '</b></p>' +
+      '<label class="check"><input type="checkbox" data-confirmar-cada ' +
+      (cfg.confirmarAntesDeFechar ? 'checked' : '') +
+      '><span>Confirmar cada OS antes de fechar<small>Desmarcado, fecha em sequência sem parar.</small></span></label>' +
+      '<div class="linha">' +
+      '<button class="acao" data-proximo>Fechar o próximo</button>' +
+      '<button class="acao secundaria" data-sequencia>Fechar em sequência</button>' +
+      '</div>' +
+      '</fieldset>' +
+      '<fieldset><legend>Pendentes</legend>' +
+      (pendentes.length
+        ? '<ul class="lista">' +
+          pendentes
+            .map(function (item) {
+              return (
+                '<li><span class="nome">OS ' + esc(item.numero) + '</span>' +
+                '<button class="acao" data-os="' + esc(item.numero) + '">Fechar</button></li>'
+              );
+            })
+            .join('') +
+          '</ul>'
+        : '<p class="aviso-inline">Nada pendente. Se a lista do Neovero acabou de mudar, reabra esta janela.</p>') +
+      '</fieldset>' +
+      '<label class="check"><input type="checkbox" data-botao-lista ' + (cfg.fila.botaoNaLista ? 'checked' : '') +
+      '><span>Mostrar botão de fechar ao passar o mouse na lista</span></label>';
+
+    const sobre = abrirSobreposicao(
+      'Fila de atendimento',
+      html,
+      '<button class="acao secundaria" data-fechar>Fechar janela</button>'
+    );
+
+    sobre.addEventListener('change', function (ev) {
+      if (ev.target.dataset && ev.target.dataset.botaoLista !== undefined) {
+        NV.config.aplicar({ fila: { botaoNaLista: ev.target.checked } });
+      }
+    });
+
+    sobre.addEventListener('click', async function (ev) {
+      const alvo = ev.target;
+      const confirmarCada = function () {
+        const check = sobre.querySelector('[data-confirmar-cada]');
+        return !check || check.checked;
+      };
+      if (alvo.dataset && alvo.dataset.os) {
+        sobre.remove();
+        await fecharDaLista(alvo.dataset.os);
+      } else if (alvo.dataset && alvo.dataset.proximo !== undefined) {
+        sobre.remove();
+        await fecharProximoDaFila();
+      } else if (alvo.dataset && alvo.dataset.sequencia !== undefined) {
+        const cada = confirmarCada();
+        sobre.remove();
+        if (!cada) {
+          const ok = await confirmar(
+            'Fechar em sequência',
+            'Serão fechadas até <b>' + Math.min(cfg.lote.maximo, pendentes.length) + '</b> OS sem parar para confirmar. ' +
+              'Continuar?',
+            'Executar'
+          );
+          if (!ok) return;
+        }
+        await fecharFilaEmSequencia(cada);
+      }
+    });
+
+    return sobre;
   }
 
   /* ---------------- conferir tela (levantamento) ---------------- */
@@ -4929,6 +5381,7 @@
       '</fieldset>' +
       '<fieldset><legend>Compatibilidade</legend>' +
       check('fecharCalendarioComEsc', 'Fechar calendário com Esc depois de escrever a data', 'Desmarque se o Esc fechar o modal inteiro.') +
+      check('fila.botaoNaLista', 'Mostrar botão de fechar ao passar o mouse na lista do Monitor') +
       '<label class="campo">Escrita nos campos de data<select data-c="entradaDatas">' +
       ['auto', 'valor', 'teclas']
         .map((v) => '<option value="' + v + '"' + (cfg.entradaDatas === v ? ' selected' : '') + '>' + v + '</option>')
@@ -4949,8 +5402,11 @@
       '</div>' +
       '</fieldset>' +
       '<fieldset><legend>Atalhos</legend>' +
-      '<div class="grade3">' +
+      '<div class="grade2">' +
       '<label class="campo">Fechar chamado<input type="text" data-c="atalhos.fechar" value="' + esc(cfg.atalhos.fechar) + '"></label>' +
+      '<label class="campo">Fechar o próximo da fila<input type="text" data-c="atalhos.proximo" value="' + esc(cfg.atalhos.proximo) + '"></label>' +
+      '</div>' +
+      '<div class="grade2">' +
       '<label class="campo">Lote<input type="text" data-c="atalhos.lote" value="' + esc(cfg.atalhos.lote) + '"></label>' +
       '<label class="campo">Mostrar painel<input type="text" data-c="atalhos.painel" value="' + esc(cfg.atalhos.painel) + '"></label>' +
       '</div>' +
@@ -5459,6 +5915,9 @@
         if (combinacaoBate(ev, cfg.atalhos.fechar)) {
           ev.preventDefault();
           executar({});
+        } else if (combinacaoBate(ev, cfg.atalhos.proximo)) {
+          ev.preventDefault();
+          fecharProximoDaFila();
         } else if (combinacaoBate(ev, cfg.atalhos.lote)) {
           ev.preventDefault();
           abrirLote();
@@ -5510,10 +5969,13 @@
       '<button class="acao secundaria" data-so-ocorrencia title="Lança a ocorrência sem fechar a OS">Só ocorrência</button>' +
       '</div>' +
       '<div class="linha">' +
+      '<button class="acao secundaria" data-fila title="Fechar direto da lista do Monitor, sem abrir a OS">Fila</button>' +
       '<button class="acao secundaria" data-lote>Lote</button>' +
+      '</div>' +
+      '<div class="linha">' +
+      '<button class="acao secundaria" data-conferir title="Só leitura: mostra o que o script encontra nesta tela">Conferir tela</button>' +
       '<button class="acao secundaria" data-log>Log</button>' +
       '</div>' +
-      '<button class="acao secundaria" data-conferir title="Só leitura: mostra o que o script encontra nesta tela">Conferir tela</button>' +
       '<div class="status" data-status></div>' +
       '</div>';
     raiz.appendChild(container);
@@ -5525,6 +5987,7 @@
       btnFechar: container.querySelector('[data-fechar-chamado]'),
       btnSimular: container.querySelector('[data-simular]'),
       btnOcorrencia: container.querySelector('[data-so-ocorrencia]'),
+      btnFila: container.querySelector('[data-fila]'),
       btnLote: container.querySelector('[data-lote]'),
       btnLog: container.querySelector('[data-log]'),
       btnConferir: container.querySelector('[data-conferir]'),
@@ -5546,6 +6009,7 @@
     refs.btnFechar.addEventListener('click', () => executar({}));
     refs.btnSimular.addEventListener('click', () => executar({ execucaoSeca: true }));
     refs.btnOcorrencia.addEventListener('click', () => executar({ apenasOcorrencia: true }));
+    refs.btnFila.addEventListener('click', abrirFila);
     refs.btnLote.addEventListener('click', abrirLote);
     refs.btnLog.addEventListener('click', abrirLog);
     refs.btnConferir.addEventListener('click', conferirTela);
@@ -5556,8 +6020,14 @@
     });
 
     habilitarArrasto();
-    registrarAtalhos();
-    globaisRegistrados = true;
+    if (!globaisRegistrados) {
+      registrarAtalhos();
+      /* Botão que aparece sobre a linha do Monitor. */
+      if (NV.lista) NV.lista.iniciar(fecharDaLista);
+      NV.async.intervalo(atualizarContadorDaFila, 5000);
+      globaisRegistrados = true;
+    }
+    atualizarContadorDaFila();
     status('Pronto. Abra uma OS e clique em Fechar chamado (' + cfg.atalhos.fechar + ').');
     return painel;
   };
@@ -5992,6 +6462,59 @@
 
     configurarPadrao();
     return 'cada OS fechada com o serviço vindo da sua própria descrição';
+  });
+
+  teste('Fila: fecha a OS escolhida na lista sem abri-la antes', async function () {
+    configurarPadrao();
+    NV().fila.limparMemoria();
+    const app = window.AppFalso.montar({ listaOs: ['202602693', '202602691', '202602690'], numero: '202602693' });
+
+    const pendentes = NV().fila.pendentes({ cache: false });
+    igual(pendentes.length, 3, 'pendentes na fila');
+    igual(pendentes[0].numero, '202602693', 'ordem da lista');
+
+    const resultado = await NV().fila.fecharUm('202602690', {});
+    afirmar(resultado.ok && resultado.fechada, 'fluxo falhou: ' + resultado.erro);
+    igual(app.estado.numero, '202602690', 'a OS pedida foi aberta pela lista');
+    igual(app.estado.fechada, true, 'OS encerrada');
+    igual(NV().fila.contar({ cache: false }), 2, 'a OS fechada saiu da fila');
+
+    NV().fila.limparMemoria();
+    return 'abriu pela lista, fechou e saiu da fila';
+  });
+
+  teste('Fila: botão aparece ao passar o mouse na linha do Monitor', async function () {
+    configurarPadrao();
+    NV().fila.limparMemoria();
+    window.AppFalso.montar({ listaOs: ['202602693', '202602691'], numero: '202602693' });
+    NV().lista.iniciar(function () {});
+
+    const host = document.querySelector('[data-nv-ui="lista"]');
+    afirmar(host && host.shadowRoot, 'a camada do botão deveria existir');
+    const botao = host.shadowRoot.querySelector('.botao');
+    afirmar(botao, 'botão não encontrado');
+    igual(botao.style.display, '', 'começa escondido');
+
+    const linha = document.querySelectorAll('.linha-os')[1];
+    const r = linha.getBoundingClientRect();
+    document.dispatchEvent(
+      new MouseEvent('mousemove', {
+        bubbles: true,
+        clientX: Math.round(r.left + r.width / 2),
+        clientY: Math.round(r.top + r.height / 2)
+      })
+    );
+    await esperar(200);
+
+    igual(botao.style.display, 'inline-flex', 'o botão deveria aparecer sobre a linha');
+    afirmar(/202602691/.test(botao.textContent), 'o botão deveria citar a OS da linha: ' + botao.textContent);
+
+    /* Sai da linha: o botão desaparece. */
+    document.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 5, clientY: 5 }));
+    await esperar(600);
+    igual(botao.style.display, 'none', 'o botão deveria esconder ao sair da linha');
+
+    return 'botão flutuante segue a linha sob o mouse, sem alterar o DOM da aplicação';
   });
 
   teste('Funciona com a OS dentro de um iframe (janelas MDI do ASP.NET)', async function () {

@@ -68,8 +68,12 @@
     cacheServicos: { valores: [], atualizadoEm: null },
     atalhos: {
       fechar: 'Alt+F',
+      proximo: 'Alt+G',
       lote: 'Alt+Shift+F',
       painel: 'Alt+N'
+    },
+    fila: {
+      botaoNaLista: true
     },
     tempos: {
       elemento: 10000,

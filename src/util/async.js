@@ -55,6 +55,13 @@
     }, options);
   };
 
+  /* setInterval que não impede o processo de encerrar em ambiente Node (testes). */
+  async.intervalo = function (fn, ms) {
+    const id = setInterval(fn, ms);
+    if (id && typeof id.unref === 'function') id.unref();
+    return id;
+  };
+
   async.tentar = async function (fn, options) {
     const opts = options || {};
     const tentativas = Math.max(1, opts.tentativas || 3);

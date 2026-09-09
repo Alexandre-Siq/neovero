@@ -10,6 +10,7 @@ import { carregarModulos, montarApp } from './ajuda/ambiente.mjs';
 const NV = await carregarModulos();
 await import('../src/ui/estilos.js');
 await import('../src/ui/aprender.js');
+await import('../src/ui/lista.js');
 await import('../src/ui/painel.js');
 
 test('painel montado não cancela o fluxo com o Esc que o próprio script dispara', async () => {

@@ -42,12 +42,13 @@ eles rodam contra uma réplica da tela.
 1. Baixe [`dist/autoteste.html`](dist/autoteste.html) — no GitHub, abra o arquivo e use o botão
    *Download raw file*.
 2. Abra o arquivo baixado no Chrome/Edge (duplo clique).
-3. Ele executa 13 verificações sozinho: painel injetado, simulação preenchendo os campos,
+3. Ele executa 15 verificações sozinho: painel injetado, simulação preenchendo os campos,
    fechamento completo, campos opcionais, aborto quando o serviço do preset não existe, calibração
    de seletor, modo lote (inclusive com classificação por descrição), "Conferir tela",
-   classificação pela descrição, intervalo de 1 minuto entre as datas e `iframe`.
+   classificação pela descrição, intervalo de 1 minuto entre as datas, fila (fechar pela lista e
+   botão flutuante sobre a linha) e `iframe`.
 
-**13/13 verde** = pode instalar. Se alguma falhar, clique em **Copiar relatório** e me mande o texto:
+**15/15 verde** = pode instalar. Se alguma falhar, clique em **Copiar relatório** e me mande o texto:
 ele diz exatamente qual passo falhou e por quê.
 
 ### 2. Demonstração manual
@@ -98,6 +99,7 @@ O painel tem:
 | **Só ocorrência** | Lança a ocorrência e deixa a OS aberta |
 | **Lote** (`Alt+Shift+F`) | Fecha várias OS da lista do Monitor de Atendimento |
 | **Log** | Passo a passo da última execução (útil quando algo falha) |
+| **Fila** (`Alt+G` = próximo) | Fecha direto da lista do Monitor, sem abrir a OS antes |
 | **Conferir tela** | **Só leitura.** Mostra o que o script encontra na tela e lista as opções reais dos combos |
 | **⚙** | Presets, comportamento, calibração de seletores e diagnóstico |
 
@@ -156,6 +158,24 @@ Com um preset de serviço automático, o lote trabalha em duas passadas:
 
 Dá para desmarcar a revisão e deixar o lote usar a sugestão de cada chamado direto, mas só vale a
 pena depois que as regras estiverem afinadas.
+
+## Fila de atendimento
+
+Duas formas de fechar sem navegar até a OS:
+
+- **Passe o mouse em uma linha do Monitor** e clique no botão `⚡ Fechar <número>` que aparece
+  sobre ela. O script abre a OS, fecha e volta. Esse botão é um elemento flutuante nosso, não é
+  injetado no HTML do Neovero — nenhuma re-renderização da tela o perde nem tem o layout alterado.
+- **Botão Fila** no painel: lista os pendentes com um botão por linha, mais **Fechar o próximo**
+  (`Alt+G`) e **Fechar em sequência**, que vai fechando um após o outro na ordem da lista.
+
+O que já foi fechado (e o que falhou) sai da fila durante a sessão, então "o próximo" nunca volta
+para o mesmo chamado — importante porque a lista do Neovero leva um tempo para atualizar. Em
+sequência, o comportamento no erro segue a configuração do lote (parar no primeiro erro ou seguir),
+e `Esc` interrompe.
+
+Na janela da Fila dá para desmarcar "Confirmar cada OS antes de fechar" e deixar a sequência correr
+sem parar — vale só depois que as regras de classificação estiverem afinadas.
 
 ## Classificação automática do serviço
 
@@ -258,7 +278,7 @@ por navegador (e pode ser exportado para os colegas).
 
 ## O que eu preciso de você
 
-O código já está pronto e testado contra uma réplica da tela (102 testes automatizados,
+O código já está pronto e testado contra uma réplica da tela (112 testes automatizados,
 incluindo o fluxo completo de ponta a ponta, com e sem `iframe`). O endereço já está resolvido
 (`ishaoc.neovero.com`). O que falta é ajustar aos detalhes do HTML real. Em ordem de prioridade:
 
@@ -302,7 +322,7 @@ confirmação de que o fornecedor não proíbe isso em contrato.
 
 ```bash
 npm install       # só jsdom, usado nos testes
-npm test          # 102 testes: texto, datas, espera, config, build e fluxo completo em jsdom
+npm test          # 112 testes: texto, datas, espera, config, build e fluxo completo em jsdom
 npm run build     # gera dist/ (userscript, extensão, autoteste.html e demo-autonomo.html)
 ```
 
@@ -311,8 +331,8 @@ Estrutura:
 ```
 src/util/     text (comparação tolerante a acento/caixa), dates (formato pt-BR), async (espera com timeout), dom
 src/core/     config (presets), localizar (elemento lógico → DOM), campos (preencher e verificar),
-              classificar (descrição → serviço), fluxo (orquestração), lote, diagnostico, log
-src/ui/       painel, estilos, aprender (captura de seletor por clique)
+              classificar (descrição → serviço), fluxo (orquestração), fila, lote, diagnostico, log
+src/ui/       painel, estilos, aprender (captura de seletor por clique), lista (botão sobre a linha)
 demo/         app-falso.js (réplica da tela), autoteste.js (verificações no navegador), roteiro.js
 test/         mesma réplica rodando em jsdom, mais os testes de lógica pura
 ```

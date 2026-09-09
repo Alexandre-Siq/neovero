@@ -25,9 +25,11 @@ const ARQUIVOS = [
   'src/core/campos.js',
   'src/core/fluxo.js',
   'src/core/lote.js',
+  'src/core/fila.js',
   'src/core/diagnostico.js',
   'src/ui/estilos.js',
   'src/ui/aprender.js',
+  'src/ui/lista.js',
   'src/ui/painel.js',
   'src/main.js'
 ];

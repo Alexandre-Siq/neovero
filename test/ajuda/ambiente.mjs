@@ -77,6 +77,7 @@ export async function carregarModulos() {
   await import('../../src/core/campos.js');
   await import('../../src/core/fluxo.js');
   await import('../../src/core/lote.js');
+  await import('../../src/core/fila.js');
   await import('../../src/core/diagnostico.js');
   /* Script de página: registra window.AppFalso ao ser carregado. */
   await import('../../demo/app-falso.js');

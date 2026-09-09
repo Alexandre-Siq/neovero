@@ -11,23 +11,7 @@
 
   let ativo = null;
 
-  /* Entra nos iframes de mesma origem: as janelas da OS podem estar dentro deles. */
-  function elementoNoPonto(x, y) {
-    let el = document.elementFromPoint(x, y);
-    let deslocX = 0;
-    let deslocY = 0;
-    for (let n = 0; n < 3 && el && (el.tagName === 'IFRAME' || el.tagName === 'FRAME'); n += 1) {
-      const interno = dom.documentoDoFrame(el);
-      if (!interno) break;
-      const r = el.getBoundingClientRect();
-      deslocX += r.left;
-      deslocY += r.top;
-      const dentro = interno.elementFromPoint(x - deslocX, y - deslocY);
-      if (!dentro) break;
-      el = dentro;
-    }
-    return el;
-  }
+  const elementoNoPonto = dom.elementoNoPonto;
 
   function criarCamada() {
     const camada = document.createElement('div');

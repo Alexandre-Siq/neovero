@@ -333,6 +333,59 @@
     return 'cada OS fechada com o serviço vindo da sua própria descrição';
   });
 
+  teste('Fila: fecha a OS escolhida na lista sem abri-la antes', async function () {
+    configurarPadrao();
+    NV().fila.limparMemoria();
+    const app = window.AppFalso.montar({ listaOs: ['202602693', '202602691', '202602690'], numero: '202602693' });
+
+    const pendentes = NV().fila.pendentes({ cache: false });
+    igual(pendentes.length, 3, 'pendentes na fila');
+    igual(pendentes[0].numero, '202602693', 'ordem da lista');
+
+    const resultado = await NV().fila.fecharUm('202602690', {});
+    afirmar(resultado.ok && resultado.fechada, 'fluxo falhou: ' + resultado.erro);
+    igual(app.estado.numero, '202602690', 'a OS pedida foi aberta pela lista');
+    igual(app.estado.fechada, true, 'OS encerrada');
+    igual(NV().fila.contar({ cache: false }), 2, 'a OS fechada saiu da fila');
+
+    NV().fila.limparMemoria();
+    return 'abriu pela lista, fechou e saiu da fila';
+  });
+
+  teste('Fila: botão aparece ao passar o mouse na linha do Monitor', async function () {
+    configurarPadrao();
+    NV().fila.limparMemoria();
+    window.AppFalso.montar({ listaOs: ['202602693', '202602691'], numero: '202602693' });
+    NV().lista.iniciar(function () {});
+
+    const host = document.querySelector('[data-nv-ui="lista"]');
+    afirmar(host && host.shadowRoot, 'a camada do botão deveria existir');
+    const botao = host.shadowRoot.querySelector('.botao');
+    afirmar(botao, 'botão não encontrado');
+    igual(botao.style.display, '', 'começa escondido');
+
+    const linha = document.querySelectorAll('.linha-os')[1];
+    const r = linha.getBoundingClientRect();
+    document.dispatchEvent(
+      new MouseEvent('mousemove', {
+        bubbles: true,
+        clientX: Math.round(r.left + r.width / 2),
+        clientY: Math.round(r.top + r.height / 2)
+      })
+    );
+    await esperar(200);
+
+    igual(botao.style.display, 'inline-flex', 'o botão deveria aparecer sobre a linha');
+    afirmar(/202602691/.test(botao.textContent), 'o botão deveria citar a OS da linha: ' + botao.textContent);
+
+    /* Sai da linha: o botão desaparece. */
+    document.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 5, clientY: 5 }));
+    await esperar(600);
+    igual(botao.style.display, 'none', 'o botão deveria esconder ao sair da linha');
+
+    return 'botão flutuante segue a linha sob o mouse, sem alterar o DOM da aplicação';
+  });
+
   teste('Funciona com a OS dentro de um iframe (janelas MDI do ASP.NET)', async function () {
     configurarPadrao();
     const app = window.AppFalso.emIframe({ numero: '202602691' });

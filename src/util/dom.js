@@ -183,6 +183,37 @@
     return r.width * r.height;
   };
 
+  /*
+   * Elemento sob o ponteiro, entrando em iframes de mesma origem.
+   * Devolve null em ambientes sem layout (jsdom não implementa elementFromPoint).
+   */
+  dom.elementoNoPonto = function (x, y) {
+    let el;
+    try {
+      el = document.elementFromPoint(x, y);
+    } catch (erro) {
+      return null;
+    }
+    let deslocX = 0;
+    let deslocY = 0;
+    for (let n = 0; n < 3 && el && (el.tagName === 'IFRAME' || el.tagName === 'FRAME'); n += 1) {
+      const interno = dom.documentoDoFrame(el);
+      if (!interno) break;
+      const r = el.getBoundingClientRect();
+      deslocX += r.left;
+      deslocY += r.top;
+      let dentro = null;
+      try {
+        dentro = interno.elementFromPoint(x - deslocX, y - deslocY);
+      } catch (erro) {
+        dentro = null;
+      }
+      if (!dentro) break;
+      el = dentro;
+    }
+    return el;
+  };
+
   /* Coordenadas na janela do topo, somando o deslocamento dos iframes. */
   dom.retanguloAbsoluto = function (el) {
     const r = el.getBoundingClientRect();
@@ -453,9 +484,7 @@
       });
     };
     registrar();
-    const temporizador = setInterval(registrar, 4000);
-    /* Em ambiente Node (testes) o timer não deve impedir o processo de encerrar. */
-    if (temporizador && typeof temporizador.unref === 'function') temporizador.unref();
+    const temporizador = NV.async.intervalo(registrar, 4000);
     return function desligar() {
       clearInterval(temporizador);
       dom.documentos().forEach(function (doc) {
