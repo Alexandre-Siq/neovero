@@ -1,0 +1,21 @@
+{
+  "manifest_version": 3,
+  "name": "Neovero+ — fechamento rápido de chamados",
+  "version": "0.1.0",
+  "description": "Lança a ocorrência e fecha a Ordem de Serviço do Neovero em um clique.",
+  "content_scripts": [
+    {
+      "matches": [
+        "https://ishaoc.neovero.com/*",
+        "https://*.neovero.com/*",
+        "https://neovero.com/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle",
+      "all_frames": false,
+      "world": "MAIN"
+    }
+  ]
+}
