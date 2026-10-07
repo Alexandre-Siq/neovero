@@ -6746,7 +6746,8 @@
     afirmar(host && host.shadowRoot, 'a camada do botão deveria existir');
     const botao = host.shadowRoot.querySelector('.botao');
     afirmar(botao, 'botão não encontrado');
-    igual(botao.style.display, '', 'começa escondido');
+    /* Pode estar '' (nunca exibido) ou 'none' (escondido por um scroll anterior). */
+    afirmar(botao.style.display !== 'inline-flex', 'deveria começar escondido, está ' + botao.style.display);
 
     /* O relatório deste autoteste cobre a tela inteira; sem escondê-lo, o ponto sob o
        cursor seria o próprio relatório e não a linha da lista. */
