@@ -367,6 +367,28 @@
     );
   };
 
+  /*
+   * No lote, "firme" entra direto: a descrição foi lida e uma regra apontou para um
+   * serviço da lista com confiança alta. O resto fica na tela para ajuste.
+   */
+  classificar.firme = function (item, minimo) {
+    const limite = minimo != null ? minimo : 0.9;
+    if (!item || !item.descricao || !item.servico) return false;
+    if (item.origem !== 'regra') return false;
+    const confianca = item.sugestao && Number(item.sugestao.confianca);
+    return confianca >= limite;
+  };
+
+  classificar.separarLote = function (itens, minimo) {
+    const firmes = [];
+    const duvidosos = [];
+    (itens || []).forEach(function (item) {
+      if (classificar.firme(item, minimo)) firmes.push(item);
+      else duvidosos.push(item);
+    });
+    return { firmes: firmes, duvidosos: duvidosos };
+  };
+
   /* Resolve um nome de serviço (de regra ou preset) para a entrada real da lista. */
   classificar.acharNaLista = function (lista, nome) {
     const opcoes = lista || [];

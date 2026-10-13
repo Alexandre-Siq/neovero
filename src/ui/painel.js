@@ -605,10 +605,17 @@
     }
   }
 
-  /* Segunda etapa do lote: revisar o serviço classificado de cada OS antes de fechar. */
+  /*
+   * Segunda etapa do lote. Chamado com regra firme entra marcado, numa lista fechada.
+   * Só os duvidosos pedem ajuste. Trocar o serviço oferece gravar a palavra como regra.
+   */
   function revisarClassificacaoDoLote(itens, opcoes) {
     return new Promise(function (resolve) {
-      const semDescricao = itens.filter(function (i) {
+      const cfg = NV.config.obter();
+      const grupos = NV.classificar.separarLote(itens, cfg.classificacao.confirmarAbaixoDe);
+      const firmes = grupos.firmes;
+      const duvidosos = grupos.duvidosos;
+      const semDescricao = duvidosos.filter(function (i) {
         return !i.descricao;
       }).length;
 
@@ -620,56 +627,112 @@
           .join('');
       };
 
-      const linhas = itens
+      const linhasFirmes = firmes
+        .map(function (item) {
+          return (
+            '<li>' +
+            '<input type="checkbox" data-firme data-os="' + esc(item.numero) + '" data-servico="' + esc(item.servico) + '" checked>' +
+            '<span class="nome"><b>OS ' + esc(item.numero) + '</b> ' +
+            esc(NV.text.truncate(item.descricao, 72)) + '</span>' +
+            '<span class="badge" style="color:#34d399">' + esc(item.servico) + '</span>' +
+            '</li>'
+          );
+        })
+        .join('');
+
+      const linhasDuvida = duvidosos
         .map(function (item) {
           const confianca = item.sugestao && item.sugestao.confianca ? Math.round(item.sugestao.confianca * 100) + '%' : '—';
-          const cor = !item.descricao ? '#f87171' : item.origem === 'regra' ? '#34d399' : '#fbbf24';
+          const cor = !item.descricao ? '#f87171' : '#fbbf24';
+          const palavra = item.descricao
+            ? NV.classificar.sugerirPalavraChave(item.descricao, NV.config.regrasDeClassificacao()) || ''
+            : '';
           return (
-            '<li style="display:block">' +
+            '<li style="display:block" data-linha="' + esc(item.numero) + '">' +
             '<div style="display:flex;gap:8px;align-items:baseline">' +
             '<b>OS ' + esc(item.numero) + '</b>' +
             '<span class="nome" style="color:#8b95a3">' +
             esc(item.descricao ? NV.text.truncate(item.descricao, 90) : 'descrição não lida' + (item.erro ? ' (' + item.erro + ')' : '')) +
             '</span>' +
-            '<span class="badge" style="color:' + cor + '">' + esc(item.origem) + ' ' + confianca + '</span>' +
+            '<span class="badge" style="color:' + cor + '">' + esc(item.origem || '—') + ' ' + confianca + '</span>' +
             '</div>' +
-            '<select data-os="' + esc(item.numero) + '" style="margin-top:6px">' +
+            '<select data-os="' + esc(item.numero) + '" data-original="' + esc(item.servico || '') + '" style="margin-top:6px">' +
             '<option value="">— não fechar esta OS —</option>' +
             opcoesHtml(item.servico) +
             '</select>' +
+            '<label class="check" data-aprender-linha style="display:none;margin-top:6px">' +
+            '<input type="checkbox" data-aprender checked>' +
+            '<span>Gravar regra <input type="text" data-palavra value="' + esc(palavra) +
+            '" style="width:140px;display:inline-block;margin:0 4px"> → este serviço' +
+            '<small>O próximo chamado com essa palavra usa o serviço corrigido.</small></span></label>' +
             '</li>'
           );
         })
         .join('');
 
       const html =
+        (firmes.length
+          ? '<details data-firmes>' +
+            '<summary style="cursor:pointer;color:#34d399"><b>' + firmes.length +
+            '</b> com regra firme entram direto. Abra só para tirar algum.</summary>' +
+            '<ul class="lista" style="max-height:220px;margin-top:8px">' + linhasFirmes + '</ul>' +
+            '</details>'
+          : '') +
         '<div class="' + (semDescricao ? 'aviso' : 'aviso-inline') + '">' +
-        (semDescricao
-          ? '<b>' + semDescricao + ' OS sem descrição lida.</b> Confira o serviço nessas linhas antes de continuar.'
-          : 'Serviço sugerido pela descrição de cada chamado. Ajuste o que estiver errado — o combo tem a lista completa.') +
+        (duvidosos.length
+          ? '<b>' + duvidosos.length + '</b> para conferir.' +
+            (semDescricao ? ' <b>' + semDescricao + '</b> sem descrição lida.' : ' Trocar o serviço grava uma regra para a próxima.')
+          : 'Nenhum chamado duvidoso. Os de regra firme seguem com o serviço da regra.') +
         '</div>' +
-        '<ul class="lista" style="max-height:420px">' + linhas + '</ul>';
+        (duvidosos.length ? '<ul class="lista" data-duvidosos style="max-height:360px">' + linhasDuvida + '</ul>' : '');
 
       const sobre = abrirSobreposicao(
         'Revisar classificação do lote',
         html,
         '<button class="acao secundaria" data-cancelar>Cancelar</button>' +
-          '<button class="acao" data-executar>Fechar as OS revisadas</button>'
+          '<button class="acao" data-executar>' +
+          (duvidosos.length ? 'Fechar os confirmados' : 'Fechar os ' + firmes.length + ' chamados') +
+          '</button>'
       );
+
+      sobre.addEventListener('change', function (ev) {
+        const sel = ev.target;
+        if (!sel.dataset || sel.tagName !== 'SELECT' || sel.dataset.os === undefined) return;
+        const linha = sel.closest('li');
+        const aprender = linha && linha.querySelector('[data-aprender-linha]');
+        if (!aprender) return;
+        const mudou = !!(sel.value && sel.value !== sel.dataset.original);
+        aprender.style.display = mudou ? 'flex' : 'none';
+      });
 
       sobre.addEventListener('click', function (ev) {
         const alvo = ev.target;
         if (alvo.dataset && alvo.dataset.executar !== undefined) {
           const mapa = {};
           const numeros = [];
+          let regrasCriadas = 0;
+          sobre.querySelectorAll('input[data-firme]:checked').forEach(function (box) {
+            mapa[box.dataset.os] = box.dataset.servico;
+            numeros.push(box.dataset.os);
+          });
           sobre.querySelectorAll('select[data-os]').forEach(function (sel) {
             if (!sel.value) return;
             mapa[sel.dataset.os] = sel.value;
             numeros.push(sel.dataset.os);
+            if (sel.value === sel.dataset.original) return;
+            const linha = sel.closest('li');
+            const check = linha && linha.querySelector('[data-aprender]');
+            const campo = linha && linha.querySelector('[data-palavra]');
+            if (!check || !check.checked || !campo) return;
+            const chave = String(campo.value || '').replace(/=>/g, ' ').replace(/,/g, ' ').trim();
+            if (criarRegra(chave, sel.value)) regrasCriadas += 1;
           });
           sobre.remove();
-          resolve({ numeros: numeros, servicosPorOs: mapa });
-        } else if ((alvo.dataset && alvo.dataset.cancelar !== undefined) || alvo === sobre) {
+          resolve({ numeros: numeros, servicosPorOs: mapa, regrasCriadas: regrasCriadas });
+        } else if (
+          (alvo.dataset && (alvo.dataset.cancelar !== undefined || alvo.dataset.fechar !== undefined)) ||
+          alvo === sobre
+        ) {
           sobre.remove();
           resolve(null);
         }
@@ -698,8 +761,8 @@
     const html =
       '<div class="aviso">O modo lote abre cada OS, lança a ocorrência e fecha. ' +
       (automatico
-        ? 'Como o preset escolhe o serviço pela descrição, primeiro é feita uma passada de leitura ' +
-          'para você <b>revisar a classificação</b> de cada chamado.'
+        ? 'Como o preset escolhe o serviço pela descrição, a revisão mostra só os chamados duvidosos. ' +
+          'Os que bateram numa regra <b>entram direto</b>.'
         : 'Confirme antes que o preset é o correto para <b>todas</b> as OS marcadas.') +
       '</div>' +
       '<label class="campo">Preset aplicado<span class="badge">' + esc(preset.nome || '—') + '</span></label>' +
@@ -725,7 +788,7 @@
       (automatico
         ? '<label class="check"><input type="checkbox" data-revisar checked>' +
           '<span>Revisar a classificação antes de fechar' +
-          '<small>Desmarcado, usa a sugestão de cada chamado sem perguntar.</small></span></label>'
+          '<small>Os duvidosos aparecem para ajuste. Corrigir o serviço grava uma regra.</small></span></label>'
         : '');
 
     const sobre = abrirSobreposicao(
@@ -791,7 +854,15 @@
         status('Lote cancelado');
         return;
       }
-      await executarLote(revisado.numeros, revisado.servicosPorOs);
+      const resumo = await executarLote(revisado.numeros, revisado.servicosPorOs);
+      if (revisado.regrasCriadas && resumo) {
+        status(
+          '✓ ' + resumo.sucesso + '/' + resumo.total + ' fechadas' +
+            (resumo.falhas.length ? ' · ' + resumo.falhas.length + ' falha(s), veja o log' : '') +
+            ' · ' + revisado.regrasCriadas + ' regra(s) gravada(s)',
+          resumo.falhas.length ? 'erro' : 'ok'
+        );
+      }
     });
   }
 
@@ -1535,6 +1606,7 @@
   painel.status = status;
   painel.abrirConfig = abrirConfig;
   painel.executar = executar;
+  painel.revisarClassificacaoDoLote = revisarClassificacaoDoLote;
 
   NV.painel = painel;
 })((globalThis.NV = globalThis.NV || {}));

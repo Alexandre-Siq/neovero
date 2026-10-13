@@ -239,6 +239,29 @@ test('conferirRegras aponta regras órfãs com sugestão', () => {
   assert.equal(outras.length, 1);
 });
 
+test('no lote, regra firme entra direto e o resto fica para conferir', () => {
+  const firme = {
+    numero: '1',
+    descricao: 'trocar o toner',
+    servico: 'SUBSTITUIÇÃO DE TONNER/CILINDRO',
+    origem: 'regra',
+    sugestao: { confianca: 0.95 }
+  };
+  const duvidas = [
+    { numero: '2', descricao: 'algo vago', servico: 'DUVIDA', origem: 'similaridade', sugestao: { confianca: 0.62 } },
+    { numero: '3', descricao: '', servico: 'CONFIGURAÇÃO DE EQUIPAMENTOS', origem: 'preset', sugestao: null },
+    { numero: '4', descricao: 'quase', servico: 'ATALHO', origem: 'regra', sugestao: { confianca: 0.8 } },
+    { numero: '5', descricao: 'sem serviço', servico: '', origem: 'regra', sugestao: { confianca: 0.95 } }
+  ];
+  assert.equal(classificar.firme(firme, 0.9), true);
+  duvidas.forEach(function (item) {
+    assert.equal(classificar.firme(item, 0.9), false, item.numero);
+  });
+  const grupos = classificar.separarLote([firme].concat(duvidas), 0.9);
+  assert.deepEqual(grupos.firmes.map((i) => i.numero), ['1']);
+  assert.deepEqual(grupos.duvidosos.map((i) => i.numero), ['2', '3', '4', '5']);
+});
+
 test('todas as regras padrão apontam para serviços da lista observada', () => {
   const invalidas = classificar.conferirRegras(classificar.REGRAS_PADRAO, SERVICOS);
   assert.deepEqual(
