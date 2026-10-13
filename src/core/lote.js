@@ -1,7 +1,7 @@
 /*
  * Modo lote: percorre as OS escolhidas no Monitor de Atendimento, abre cada uma
- * e roda o fluxo de fechamento. Para no primeiro erro por padrão, para não
- * deixar meia dúzia de ocorrências pela metade.
+ * e roda o fluxo de fechamento. Segue depois de uma falha; quem marcar
+ * "Parar no 1º erro" interrompe e deixa as demais como pendentes para continuar.
  */
 (function (NV) {
   'use strict';
@@ -124,12 +124,26 @@
       );
     }
     const resultados = [];
+    let pendentes = [];
+    let interrompido = false;
+    let motivo = null;
 
     for (let i = 0; i < numeros.length; i += 1) {
-      if (sinal.cancelado) break;
+      if (sinal.cancelado) {
+        interrompido = true;
+        motivo = 'cancelado';
+        pendentes = numeros.slice(i);
+        break;
+      }
       const numero = numeros[i];
       if (opts.aoProgresso) {
-        opts.aoProgresso({ tipo: 'os', numero: numero, indice: i + 1, total: numeros.length });
+        opts.aoProgresso({
+          tipo: 'os',
+          numero: numero,
+          indice: i + 1,
+          total: numeros.length,
+          fase: opts.fase || 'fechando'
+        });
       }
       let resultado;
       try {
@@ -158,7 +172,18 @@
         erro: resultado.erro || null
       });
 
-      if (!resultado.ok && cfg.lote.pararNoPrimeiroErro) break;
+      if (resultado.cancelado || sinal.cancelado) {
+        interrompido = true;
+        motivo = 'cancelado';
+        pendentes = numeros.slice(i + 1);
+        break;
+      }
+      if (!resultado.ok && cfg.lote.pararNoPrimeiroErro) {
+        interrompido = true;
+        motivo = 'erro';
+        pendentes = numeros.slice(i + 1);
+        break;
+      }
       if (i < numeros.length - 1) await async.sleep(cfg.lote.esperaEntreOs);
     }
 
@@ -167,6 +192,9 @@
       processadas: resultados.length,
       sucesso: resultados.filter((r) => r.ok).length,
       falhas: resultados.filter((r) => !r.ok),
+      pendentes: pendentes,
+      interrompido: interrompido,
+      motivo: motivo,
       resultados: resultados
     };
   };

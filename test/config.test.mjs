@@ -105,6 +105,20 @@ test('migração sobe o limite antigo de 25 chamados e preserva um limite escolh
   assert.equal(config.aplicarMigracoes(jaMigrada).lote.maximo, 25, 'não reaplica depois que o usuário volta para 25');
 });
 
+test('migração faz o lote seguir após o erro e preserva quem voltou a parar', () => {
+  const antiga = config.aplicarMigracoes(
+    config.mesclar(config.PADRAO, {
+      lote: { pararNoPrimeiroErro: true },
+      migracoes: ['presets-servico-automatico', 'lote-acima-de-25']
+    })
+  );
+  assert.equal(antiga.lote.pararNoPrimeiroErro, false);
+
+  const deNovo = config.aplicarMigracoes(antiga);
+  deNovo.lote.pararNoPrimeiroErro = true;
+  assert.equal(config.aplicarMigracoes(deNovo).lote.pararNoPrimeiroErro, true);
+});
+
 test('migração não roda duas vezes', () => {
   const cfg = config.aplicarMigracoes(config.mesclar(config.PADRAO, { presets: [], migracoes: [] }));
   const quantidade = cfg.presets.length;

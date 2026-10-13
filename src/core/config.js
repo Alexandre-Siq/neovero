@@ -86,7 +86,7 @@
       habilitado: false,
       esperaEntreOs: 1500,
       maximo: 200,
-      pararNoPrimeiroErro: true
+      pararNoPrimeiroErro: false
     },
     entradaDatas: 'auto',
     rotulos: {
@@ -177,7 +177,7 @@
    * porque a lista salva tem prioridade sobre a de fábrica. Cada migração roda
    * uma única vez, para não ressuscitar preset que o usuário apagou de propósito.
    */
-  const MIGRACOES = ['presets-servico-automatico', 'lote-acima-de-25'];
+  const MIGRACOES = ['presets-servico-automatico', 'lote-acima-de-25', 'lote-segue-apos-erro'];
 
   function aplicarMigracoes(cfg) {
     const feitas = Array.isArray(cfg.migracoes) ? cfg.migracoes.slice() : [];
@@ -199,6 +199,13 @@
     if (feitas.indexOf('lote-acima-de-25') < 0) {
       if (novo.lote && novo.lote.maximo === 25) novo.lote.maximo = 200;
       feitas.push('lote-acima-de-25');
+    }
+
+    /* O padrão antigo interrompia o lote no primeiro erro. Quem não mudou essa
+       opção passa a seguir; marcar de novo "Parar no 1º erro" continua valendo. */
+    if (feitas.indexOf('lote-segue-apos-erro') < 0) {
+      if (novo.lote && novo.lote.pararNoPrimeiroErro === true) novo.lote.pararNoPrimeiroErro = false;
+      feitas.push('lote-segue-apos-erro');
     }
 
     novo.migracoes = feitas;

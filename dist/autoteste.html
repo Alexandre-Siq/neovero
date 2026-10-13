@@ -1584,7 +1584,7 @@
       habilitado: false,
       esperaEntreOs: 1500,
       maximo: 200,
-      pararNoPrimeiroErro: true
+      pararNoPrimeiroErro: false
     },
     entradaDatas: 'auto',
     rotulos: {
@@ -1675,7 +1675,7 @@
    * porque a lista salva tem prioridade sobre a de fábrica. Cada migração roda
    * uma única vez, para não ressuscitar preset que o usuário apagou de propósito.
    */
-  const MIGRACOES = ['presets-servico-automatico', 'lote-acima-de-25'];
+  const MIGRACOES = ['presets-servico-automatico', 'lote-acima-de-25', 'lote-segue-apos-erro'];
 
   function aplicarMigracoes(cfg) {
     const feitas = Array.isArray(cfg.migracoes) ? cfg.migracoes.slice() : [];
@@ -1697,6 +1697,13 @@
     if (feitas.indexOf('lote-acima-de-25') < 0) {
       if (novo.lote && novo.lote.maximo === 25) novo.lote.maximo = 200;
       feitas.push('lote-acima-de-25');
+    }
+
+    /* O padrão antigo interrompia o lote no primeiro erro. Quem não mudou essa
+       opção passa a seguir; marcar de novo "Parar no 1º erro" continua valendo. */
+    if (feitas.indexOf('lote-segue-apos-erro') < 0) {
+      if (novo.lote && novo.lote.pararNoPrimeiroErro === true) novo.lote.pararNoPrimeiroErro = false;
+      feitas.push('lote-segue-apos-erro');
     }
 
     novo.migracoes = feitas;
@@ -4009,8 +4016,8 @@
 /* ===== src/core/lote.js ===== */
 /*
  * Modo lote: percorre as OS escolhidas no Monitor de Atendimento, abre cada uma
- * e roda o fluxo de fechamento. Para no primeiro erro por padrão, para não
- * deixar meia dúzia de ocorrências pela metade.
+ * e roda o fluxo de fechamento. Segue depois de uma falha; quem marcar
+ * "Parar no 1º erro" interrompe e deixa as demais como pendentes para continuar.
  */
 (function (NV) {
   'use strict';
@@ -4133,12 +4140,26 @@
       );
     }
     const resultados = [];
+    let pendentes = [];
+    let interrompido = false;
+    let motivo = null;
 
     for (let i = 0; i < numeros.length; i += 1) {
-      if (sinal.cancelado) break;
+      if (sinal.cancelado) {
+        interrompido = true;
+        motivo = 'cancelado';
+        pendentes = numeros.slice(i);
+        break;
+      }
       const numero = numeros[i];
       if (opts.aoProgresso) {
-        opts.aoProgresso({ tipo: 'os', numero: numero, indice: i + 1, total: numeros.length });
+        opts.aoProgresso({
+          tipo: 'os',
+          numero: numero,
+          indice: i + 1,
+          total: numeros.length,
+          fase: opts.fase || 'fechando'
+        });
       }
       let resultado;
       try {
@@ -4167,7 +4188,18 @@
         erro: resultado.erro || null
       });
 
-      if (!resultado.ok && cfg.lote.pararNoPrimeiroErro) break;
+      if (resultado.cancelado || sinal.cancelado) {
+        interrompido = true;
+        motivo = 'cancelado';
+        pendentes = numeros.slice(i + 1);
+        break;
+      }
+      if (!resultado.ok && cfg.lote.pararNoPrimeiroErro) {
+        interrompido = true;
+        motivo = 'erro';
+        pendentes = numeros.slice(i + 1);
+        break;
+      }
       if (i < numeros.length - 1) await async.sleep(cfg.lote.esperaEntreOs);
     }
 
@@ -4176,6 +4208,9 @@
       processadas: resultados.length,
       sucesso: resultados.filter((r) => r.ok).length,
       falhas: resultados.filter((r) => !r.ok),
+      pendentes: pendentes,
+      interrompido: interrompido,
+      motivo: motivo,
       resultados: resultados
     };
   };
@@ -5111,7 +5146,14 @@
     if (evento.tipo === 'inicio') status('… ' + evento.passo, 'trabalhando');
     else if (evento.tipo === 'erro') status('✗ ' + evento.passo, 'erro');
     else if (evento.tipo === 'pulado') status('· ' + evento.passo + ' (ignorado)', 'trabalhando');
-    else if (evento.tipo === 'os') status('OS ' + evento.numero + ' (' + evento.indice + '/' + evento.total + ')', 'trabalhando');
+    else if (evento.tipo === 'os') {
+      const prefixo =
+        evento.fase === 'classificando' ? 'Lendo' :
+        evento.fase === 'novamente' ? 'Tentando de novo' :
+        evento.fase === 'continuando' ? 'Continuando' :
+        'Fechando';
+      status(prefixo + ' OS ' + evento.numero + ' (' + evento.indice + '/' + evento.total + ')', 'trabalhando');
+    }
   }
 
   function resumoDeErro(resultado) {
@@ -5636,7 +5678,17 @@
 
   /* ---------------- lote ---------------- */
 
-  async function executarLote(numeros, servicosPorOs) {
+  function textoDoResumo(resumo, nota) {
+    const pendentes = (resumo.pendentes || []).length;
+    return (
+      '✓ ' + resumo.sucesso + '/' + resumo.total + ' fechadas' +
+      (resumo.falhas.length ? ' · ' + resumo.falhas.length + ' falha(s)' : '') +
+      (pendentes ? ' · ' + pendentes + ' sem tentar' : '') +
+      (nota ? ' · ' + nota : '')
+    );
+  }
+
+  async function executarLote(numeros, servicosPorOs, fase) {
     sinalAtual = NV.fluxo.criarSinal();
     definirOcupado(true);
     try {
@@ -5645,17 +5697,101 @@
         servicosPorOs: servicosPorOs || null,
         aoProgresso: aoProgresso,
         sinal: sinalAtual,
-        aoEscolherServico: escolherServico
+        aoEscolherServico: escolherServico,
+        fase: fase || 'fechando'
       });
-      status(
-        '✓ ' + resumo.sucesso + '/' + resumo.total + ' fechadas' +
-          (resumo.falhas.length ? ' · ' + resumo.falhas.length + ' falha(s), veja o log' : ''),
-        resumo.falhas.length ? 'erro' : 'ok'
-      );
+      const atencao = resumo.falhas.length || (resumo.pendentes || []).length;
+      status(textoDoResumo(resumo), atencao ? 'erro' : 'ok');
       return resumo;
     } finally {
       definirOcupado(false);
       sinalAtual = null;
+    }
+  }
+
+  /* Depois do lote: tentar só as falhas, ou continuar as que nem foram abertas. */
+  function decidirDepoisDoLote(resumo, nota) {
+    const falhas = (resumo.falhas || []).filter(function (r) {
+      return !r.cancelado;
+    });
+    const canceladas = (resumo.falhas || []).filter(function (r) {
+      return r.cancelado;
+    });
+    const pendentes = resumo.pendentes || [];
+    if (!falhas.length && !pendentes.length) return Promise.resolve(null);
+
+    return new Promise(function (resolve) {
+      const linhaFalha = falhas
+        .map(function (r) {
+          const motivo = NV.text.truncate(resumoDeErro(r) || 'falhou', 140);
+          return (
+            '<li style="display:block">' +
+            '<b>OS ' + esc(r.numeroOs || '?') + '</b>' +
+            (r.servicoUsado ? ' <span class="badge">' + esc(r.servicoUsado) + '</span>' : '') +
+            '<div class="nome" style="color:#fca5a5;margin-top:4px">' + esc(motivo) + '</div>' +
+            '</li>'
+          );
+        })
+        .join('');
+      const html =
+        '<p class="aviso-inline"><b>' + resumo.sucesso + '</b> de <b>' + resumo.total +
+        '</b> fechadas.' +
+        (resumo.motivo === 'cancelado' ? ' Você cancelou no meio.' : '') +
+        (resumo.motivo === 'erro' ? ' O lote parou no primeiro erro.' : '') +
+        (nota ? ' ' + esc(nota) : '') +
+        '</p>' +
+        (falhas.length
+          ? '<div class="aviso"><b>' + falhas.length + '</b> falharam. Confira a OS antes de tentar de novo — a ocorrência pode ter ficado pela metade.</div>' +
+            '<ul class="lista" style="max-height:240px">' + linhaFalha + '</ul>'
+          : '') +
+        (canceladas.length
+          ? '<p class="aviso-inline">Interrompida' + (canceladas.length > 1 ? 's' : '') + ': OS ' +
+            esc(canceladas.map(function (r) { return r.numeroOs; }).join(', ')) +
+            '. Não entra no tentar de novo.</p>'
+          : '') +
+        (pendentes.length
+          ? '<p class="aviso-inline"><b>' + pendentes.length + '</b> nem chegaram a ser tentadas: ' +
+            esc(pendentes.slice(0, 8).join(', ')) + (pendentes.length > 8 ? '…' : '') + '</p>'
+          : '');
+      const botoes =
+        '<button class="acao secundaria" data-cancelar>Fechar</button>' +
+        (pendentes.length ? '<button class="acao secundaria" data-continuar>Continuar as ' + pendentes.length + ' restantes</button>' : '') +
+        (falhas.length ? '<button class="acao" data-retry>Tentar de novo (' + falhas.length + ')</button>' : '');
+      const sobre = abrirSobreposicao(resumo.interrompido ? 'Lote interrompido' : 'Lote encerrado', html, botoes);
+      const fechar = function (valor) {
+        sobre.remove();
+        resolve(valor);
+      };
+      sobre.addEventListener('click', function (ev) {
+        const alvo = ev.target;
+        if (alvo.dataset && alvo.dataset.retry !== undefined) {
+          fechar({ acao: 'retry', numeros: falhas.map(function (r) { return r.numeroOs; }) });
+        } else if (alvo.dataset && alvo.dataset.continuar !== undefined) {
+          fechar({ acao: 'continuar', numeros: pendentes.slice() });
+        } else if (
+          (alvo.dataset && (alvo.dataset.cancelar !== undefined || alvo.dataset.fechar !== undefined)) ||
+          alvo === sobre
+        ) {
+          fechar(null);
+        }
+      });
+    });
+  }
+
+  async function conduzirLote(numeros, servicosPorOs, regrasCriadas) {
+    let fila = (numeros || []).slice();
+    let fase = 'fechando';
+    let nota = regrasCriadas ? regrasCriadas + ' regra(s) gravada(s) para o próximo lote.' : '';
+    while (fila.length) {
+      const resumo = await executarLote(fila, servicosPorOs, fase);
+      if (!resumo) break;
+      const limpo = !resumo.falhas.length && !(resumo.pendentes || []).length;
+      if (nota && limpo) status(textoDoResumo(resumo, nota), 'ok');
+      const decisao = await decidirDepoisDoLote(resumo, nota);
+      nota = '';
+      if (!decisao || !decisao.numeros || !decisao.numeros.length) break;
+      fila = decisao.numeros;
+      fase = decisao.acao === 'retry' ? 'novamente' : 'continuando';
     }
   }
 
@@ -5838,7 +5974,8 @@
         .join('') +
       '</ul>' +
       '<label class="check"><input type="checkbox" data-parar ' + (cfg.lote.pararNoPrimeiroErro ? 'checked' : '') +
-      '> Parar no primeiro erro</label>' +
+      '><span>Parar no primeiro erro' +
+      '<small>Desmarcado, segue com os demais. No fim dá para tentar só os que falharam ou continuar os que não foram tentados.</small></span></label>' +
       (automatico
         ? '<label class="check"><input type="checkbox" data-revisar checked>' +
           '<span>Revisar a classificação antes de fechar' +
@@ -5879,7 +6016,7 @@
           'Executar'
         );
         if (!ok) return;
-        await executarLote(numeros, null);
+        await conduzirLote(numeros, null, 0);
         return;
       }
 
@@ -5908,15 +6045,7 @@
         status('Lote cancelado');
         return;
       }
-      const resumo = await executarLote(revisado.numeros, revisado.servicosPorOs);
-      if (revisado.regrasCriadas && resumo) {
-        status(
-          '✓ ' + resumo.sucesso + '/' + resumo.total + ' fechadas' +
-            (resumo.falhas.length ? ' · ' + resumo.falhas.length + ' falha(s), veja o log' : '') +
-            ' · ' + revisado.regrasCriadas + ' regra(s) gravada(s)',
-          resumo.falhas.length ? 'erro' : 'ok'
-        );
-      }
+      await conduzirLote(revisado.numeros, revisado.servicosPorOs, revisado.regrasCriadas);
     });
   }
 
@@ -6014,7 +6143,7 @@
       '<div class="grade3">' +
       '<label class="campo">Máx. por lote<input type="number" min="1" max="500" data-c="lote.maximo" value="' + cfg.lote.maximo + '"></label>' +
       '<label class="campo">Espera entre OS (ms)<input type="number" data-c="lote.esperaEntreOs" value="' + cfg.lote.esperaEntreOs + '"></label>' +
-      '<label class="campo">&nbsp;' + check('lote.pararNoPrimeiroErro', 'Parar no 1º erro') + '</label>' +
+      '<label class="campo">&nbsp;' + check('lote.pararNoPrimeiroErro', 'Parar no 1º erro', 'Desmarcado, segue. No fim você tenta só o que falhou.') + '</label>' +
       '</div>' +
       '</fieldset>' +
       '<fieldset><legend>Atalhos</legend>' +
@@ -6661,6 +6790,7 @@
   painel.abrirConfig = abrirConfig;
   painel.executar = executar;
   painel.revisarClassificacaoDoLote = revisarClassificacaoDoLote;
+  painel.decidirDepoisDoLote = decidirDepoisDoLote;
 
   NV.painel = painel;
 })((globalThis.NV = globalThis.NV || {}));
