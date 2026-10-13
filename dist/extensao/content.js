@@ -1016,7 +1016,7 @@
     lote: {
       habilitado: false,
       esperaEntreOs: 1500,
-      maximo: 25,
+      maximo: 200,
       pararNoPrimeiroErro: true
     },
     entradaDatas: 'auto',
@@ -1108,7 +1108,7 @@
    * porque a lista salva tem prioridade sobre a de fábrica. Cada migração roda
    * uma única vez, para não ressuscitar preset que o usuário apagou de propósito.
    */
-  const MIGRACOES = ['presets-servico-automatico'];
+  const MIGRACOES = ['presets-servico-automatico', 'lote-acima-de-25'];
 
   function aplicarMigracoes(cfg) {
     const feitas = Array.isArray(cfg.migracoes) ? cfg.migracoes.slice() : [];
@@ -1123,6 +1123,13 @@
       });
       if (faltando.length) novo.presets = novo.presets.concat(clonar(faltando));
       feitas.push('presets-servico-automatico');
+    }
+
+    /* O padrão antigo parava a leitura do lote em 25. Quem não mudou esse número
+       passa a classificar a fila inteira de um turno; um valor diferente foi escolha. */
+    if (feitas.indexOf('lote-acima-de-25') < 0) {
+      if (novo.lote && novo.lote.maximo === 25) novo.lote.maximo = 200;
+      feitas.push('lote-acima-de-25');
     }
 
     novo.migracoes = feitas;
@@ -1333,6 +1340,8 @@
     'ERRO DE PROCESSO',
     'ESTUDO/LEVANTAMENTO PARA PROJETO',
     'EXECUÇÃO DE PROJETO',
+    'IMPRESSORA PEDINDO PARA DESLIZAR PASTILHA',
+    'IMPRESSORA PRENDENDO PAPEL / AMASSANDO',
     'INSTALAÇÃO DE EQUIPAMENTO',
     'INSTALAÇÃO DE SOFTWARE OU APP',
     'INSTALAR/CONFIGURAR RIS-PACS',
@@ -1430,7 +1439,35 @@
     { quando: ['nova aba', 'nova tela', 'novo campo', 'adicionar campo', 'nova funcionalidade'], servico: 'DESENVOLVIMENTO DE TELAS MVPEP' },
     { quando: ['novo relatorio', 'relatorio personalizado', 'relatorio customizado'], servico: 'DESENVOLVIMENTO DE RELATÓRIOS PERSONALIZADOS MV' },
     { quando: ['levantamento', 'estudo de viabilidade'], servico: 'ESTUDO/LEVANTAMENTO PARA PROJETO' },
-    { quando: ['possibilidade de', 'sugestao de melhoria', 'avaliar a possibilidade'], servico: 'ANALISE DE SISTEMA', peso: -1 }
+    { quando: ['possibilidade de', 'sugestao de melhoria', 'avaliar a possibilidade'], servico: 'ANALISE DE SISTEMA', peso: -1 },
+    /* Tipos que a lista tem e o texto do chamado quase nunca repete palavra por palavra. */
+    { quando: ['deslizar pastilha', 'pastilha'], servico: 'IMPRESSORA PEDINDO PARA DESLIZAR PASTILHA', peso: 1 },
+    { quando: ['prendendo papel', 'prende papel', 'papel preso', 'papel amassado', 'amassando papel', 'amassando', 'atolamento', 'atolando'], servico: 'IMPRESSORA PRENDENDO PAPEL / AMASSANDO', peso: 1 },
+    { quando: ['criar usuario+sau', 'novo usuario+sau', 'cadastrar usuario+sau'], servico: 'CRIAÇÃO DE USUARIO (SAU)' },
+    { quando: ['criar usuario+actio', 'novo usuario+actio', 'cadastrar usuario+actio'], servico: 'CRIAÇÃO DE USUÁRIO ACTIO' },
+    { quando: ['criar usuario+fileserver', 'criar usuario+file server', 'novo usuario+fileserver', 'novo usuario+file server'], servico: 'CRIAÇÃO DE USUÁRIO FILESERVER' },
+    { quando: ['criar usuario+neovero', 'novo usuario+neovero', 'cadastrar usuario+neovero'], servico: 'CRIAÇÃO DE USUÁRIO NEOVERO' },
+    { quando: ['criar usuario+intranet', 'novo usuario+intranet'], servico: 'CRIAÇÃO DE USUÁRIO INTRANET' },
+    { quando: ['senha+actio', 'reset+actio'], servico: 'RESET DE SENHA ACTIO', peso: 1 },
+    { quando: ['senha+sau', 'reset+sau'], servico: 'RESET DE SENHA (SAU)', peso: 1 },
+    { quando: ['senha+senior', 'reset+senior'], servico: 'RESET DE SENHA SENIOR', peso: 1 },
+    { quando: ['senha+neovero', 'reset+neovero'], servico: 'RESET DE SENHA NEOVERO', peso: 1 },
+    { quando: ['senha+callcenter', 'reset+callcenter'], servico: 'RESET DE SENHA CALLCENTER', peso: 1 },
+    { quando: ['senha+email', 'senha+e-mail', 'reset+email', 'reset+e-mail'], servico: 'RESET DE SENHA DE E-MAIL', peso: 1 },
+    { quando: ['ensinar', 'treinamento', 'como utilizar', 'como usar o modulo'], servico: 'ENSINAR COMO UTILIZAR MÓDULO MV SOUL/PEP/PORTARIA/CLASSIFICAÇÃO DE RISCO', peso: 1 },
+    { quando: ['erro+processo', 'erro de processo', 'processo errado'], servico: 'ERRO DE PROCESSO' },
+    { quando: ['executar o projeto', 'executar projeto', 'execucao de projeto'], servico: 'EXECUÇÃO DE PROJETO' },
+    { quando: ['adequar o projeto', 'adequar projeto', 'adequacao de projeto'], servico: 'ADEQUAÇÃO DE PROJETO' },
+    { quando: ['cancelar atendimento', 'cancelamento de atendimento', 'cancelar o chamado'], servico: 'CANCELAMENTO DE ATENDIMENTO' },
+    { quando: ['checagem', 'validar equipamento', 'validacao de equipamento', 'checar equipamento'], servico: 'CHECAGEM E VALIDAÇÃO DE EQUIPAMENTOS' },
+    { quando: ['configurar o software', 'configurar software', 'configurar o programa', 'configuracao de software'], servico: 'CONFIGURAÇÃO DE SOFTWARE' },
+    { quando: ['configurar equipamento', 'configuracao de equipamento'], servico: 'CONFIGURAÇÃO DE EQUIPAMENTOS' },
+    { quando: ['parametro do mv', 'parametros do mv', 'configuracoes mv', 'configuracoes do mv'], servico: 'CONFIGURAÇÕES MV' },
+    { quando: ['configuracoes da intranet', 'configuracoes intranet', 'configurar a intranet'], servico: 'CONFIGURAÇÕES INTRANET' },
+    { quando: ['configurar usuario na intranet', 'configurar usuario intranet'], servico: 'CONFIGURAÇÃO DE USUÁRIO NA INTRANET' },
+    { quando: ['grupo de acesso', 'grupos de pasta', 'grupos de pastas', 'permissao de grupo'], servico: 'CONFIGURAÇÃO DE GRUPOS PARA ACESSOS DE PASTAS FILESERVER' },
+    { quando: ['configurar acesso+senior'], servico: 'CONFIGURAÇÃO DE ACESSO AO SENIOR' },
+    { quando: ['acesso do usuario+pasta', 'permissao de pasta'], servico: 'CONFIGURAÇÃO DE USUARIO PARA ACESSO A PASTAS DO FILE SERVER' }
   ];
 
   const STOPWORDS = [
@@ -1484,6 +1521,12 @@
    * plural e longa aceita qualquer terminação ("travado" pega "travados").
    */
   function contem(descricaoNormalizada, chave) {
+    /* "senha+actio" exige as duas partes, em qualquer ordem e sem serem vizinhas. */
+    const bruto = String(chave || '');
+    if (bruto.indexOf('+') >= 0) {
+      const partes = bruto.split('+').map(function (p) { return p.trim(); }).filter(Boolean);
+      return partes.length > 0 && partes.every(function (p) { return contem(descricaoNormalizada, p); });
+    }
     const alvo = text.normalize(chave).replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
     if (!alvo) return false;
     const palavras = alvo.split(' ');
@@ -1494,21 +1537,91 @@
   }
   classificar.contem = contem;
 
-  /* 0..1 — proporção das palavras do nome do serviço presentes na descrição. */
-  classificar.pontuar = function (descricao, opcao) {
-    const raizesOpcao = classificar.raizes(opcao);
-    if (!raizesOpcao.length) return 0;
-    const raizesDescricao = classificar.raizes(descricao);
-    if (!raizesDescricao.length) return 0;
-    let acertos = 0;
-    raizesOpcao.forEach(function (r) {
-      const bateu = raizesDescricao.some(function (d) {
-        return d === r || (r.length >= 4 && d.indexOf(r) === 0) || (d.length >= 4 && r.indexOf(d) === 0);
+  /* Quantas vezes cada radical aparece na lista. Palavra rara ("pastilha") pesa mais que "equipamento". */
+  classificar.indice = function (lista) {
+    const df = Object.create(null);
+    let n = 0;
+    (lista || []).forEach(function (opcao) {
+      const raizes = classificar.raizes(opcao);
+      if (!raizes.length) return;
+      n += 1;
+      const visto = Object.create(null);
+      raizes.forEach(function (r) {
+        if (visto[r]) return;
+        visto[r] = true;
+        df[r] = (df[r] || 0) + 1;
       });
-      if (bateu) acertos += 1;
     });
-    return acertos / raizesOpcao.length;
+    return { n: n, df: df };
   };
+
+  classificar.pesoRaiz = function (raiz, indice) {
+    if (!indice || !indice.n) return 1;
+    const df = indice.df[raiz] || 1;
+    return Math.log((indice.n + 1) / (df + 0.5));
+  };
+
+  /*
+   * Igualdade de radical, com folga curta para o que o stemmer não tirou
+   * ("impress" / "impresso"). Radical curto só casa inteiro: "java" não é "javascript".
+   */
+  function raizBate(raizOpcao, raizDescricao) {
+    if (raizDescricao === raizOpcao) return true;
+    const menor = raizOpcao.length <= raizDescricao.length ? raizOpcao : raizDescricao;
+    const maior = raizOpcao.length <= raizDescricao.length ? raizDescricao : raizOpcao;
+    if (menor.length < 5) return false;
+    if (maior.indexOf(menor) !== 0) return false;
+    return maior.length - menor.length <= 2;
+  }
+
+  /*
+   * score: fração do nome do serviço coberta pela descrição (0..1), com palavra rara
+   * valendo mais. peso: soma absoluta desses acertos — desempata a favor do serviço
+   * mais específico ("impressora de senha" vence "impressora" quando os dois cabem).
+   */
+  classificar.detalhar = function (descricao, opcao, indice) {
+    const raizesOpcao = classificar.raizes(opcao);
+    const raizesDescricao = classificar.raizes(descricao);
+    if (!raizesOpcao.length || !raizesDescricao.length) return { score: 0, peso: 0 };
+    let pesoTotal = 0;
+    let pesoAcertos = 0;
+    raizesOpcao.forEach(function (r) {
+      const peso = classificar.pesoRaiz(r, indice);
+      pesoTotal += peso;
+      const bateu = raizesDescricao.some(function (d) {
+        return raizBate(r, d);
+      });
+      if (bateu) pesoAcertos += peso;
+    });
+    if (!pesoTotal) return { score: 0, peso: 0 };
+    return { score: pesoAcertos / pesoTotal, peso: pesoAcertos };
+  };
+
+  /* 0..1 — proporção (ponderada) das palavras do nome do serviço presentes na descrição. */
+  classificar.pontuar = function (descricao, opcao, indice) {
+    return classificar.detalhar(descricao, opcao, indice).score;
+  };
+
+  /* Senha e criação de usuário disputam o mesmo sistema; o verbo da descrição desempata. */
+  function bonusDeIntencao(descricaoNormalizada, servico) {
+    const nome = text.normalize(servico);
+    let bonus = 0;
+    if (
+      contem(descricaoNormalizada, 'senha') ||
+      contem(descricaoNormalizada, 'resetar') ||
+      contem(descricaoNormalizada, 'esqueci')
+    ) {
+      if (nome.indexOf('reset de senha') === 0) bonus += 30;
+    }
+    if (
+      contem(descricaoNormalizada, 'criar+usuario') ||
+      contem(descricaoNormalizada, 'novo+usuario') ||
+      contem(descricaoNormalizada, 'cadastrar+usuario')
+    ) {
+      if (nome.indexOf('criacao de usuario') === 0) bonus += 30;
+    }
+    return bonus;
+  }
 
   /*
    * Mesmo serviço escrito de outro jeito: "TONNER/CILINDRO" e "TONNER E CILINDRO"
@@ -1596,14 +1709,21 @@
     const descricaoNormalizada = text.normalize(descricao).replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
 
     /* Ranking por semelhança, sempre calculado (serve de alternativa mesmo com regra). */
+    const indice = classificar.indice(lista);
     const ranking = lista
       .map(function (opcao) {
-        return { opcao: opcao, score: Number(classificar.pontuar(descricao, opcao).toFixed(3)) };
+        const detalhe = classificar.detalhar(descricao, opcao, indice);
+        return {
+          opcao: opcao,
+          score: Number(detalhe.score.toFixed(3)),
+          peso: Number(detalhe.peso.toFixed(3))
+        };
       })
       .filter(function (r) {
         return r.score > 0;
       })
       .sort(function (a, b) {
+        if (b.peso !== a.peso) return b.peso - a.peso;
         if (b.score !== a.score) return b.score - a.score;
         return a.opcao.length - b.opcao.length;
       });
@@ -1615,7 +1735,10 @@
       if (!regra || !regra.servico) return;
       (regra.quando || []).forEach(function (chave) {
         if (!contem(descricaoNormalizada, chave)) return;
-        const tamanho = text.normalize(chave).length + (Number(regra.peso) || 0) * 10;
+        const tamanho =
+          text.normalize(chave).length +
+          (Number(regra.peso) || 0) * 10 +
+          bonusDeIntencao(descricaoNormalizada, regra.servico);
         if (!melhorRegra || tamanho > melhorRegra.tamanho) {
           melhorRegra = { servico: regra.servico, chave: chave, tamanho: tamanho };
         }
@@ -1645,10 +1768,14 @@
       }
     }
 
-    /* Camada 2: semelhança. */
-    if (ranking.length && ranking[0].score >= minimo) {
-      resultado.escolhido = ranking[0].opcao;
-      resultado.confianca = ranking[0].score;
+    /* Camada 2: semelhança. O ranking privilegia o serviço mais específico; só entra
+       quem cobre o bastante do próprio nome para não cair num "equipamento" genérico. */
+    const porSemelhanca = ranking.filter(function (r) {
+      return r.score >= minimo;
+    })[0];
+    if (porSemelhanca) {
+      resultado.escolhido = porSemelhanca.opcao;
+      resultado.confianca = porSemelhanca.score;
       resultado.origem = 'similaridade';
       return resultado;
     }
@@ -2028,6 +2155,102 @@
       vistos.add(item.numero);
       return true;
     });
+  };
+
+  /* Grade do Monitor: o ancestral que realmente rola (a janela visível não é a fila inteira). */
+  localizar.containerDoMonitor = function (itens) {
+    const lista = itens && itens.length ? itens : localizar.itensDoMonitor();
+    if (!lista.length || !lista[0].el) return null;
+    let atual = lista[0].el;
+    for (let i = 0; i < 10 && atual; i += 1) {
+      if (atual.scrollHeight - atual.clientHeight > 16) return atual;
+      atual = atual.parentElement;
+    }
+    return null;
+  };
+
+  /*
+   * Percorre a lista do Monitor até o fim. DevExpress só desenha a janela visível;
+   * sem rolar, o lote só enxergava as primeiras OS da tela.
+   * options.alvo: para assim que esse número estiver renderizado (não volta o scroll).
+   * options.espera: pausa entre passos.
+   */
+  async function varrerMonitor(opcoes) {
+    const opts = opcoes || {};
+    const espera = opts.espera != null ? opts.espera : 40;
+    const alvo = opts.alvo ? String(opts.alvo) : null;
+    const mapa = new Map();
+
+    const acrescentar = function () {
+      localizar.itensDoMonitor().forEach(function (item) {
+        const anterior = mapa.get(item.numero);
+        if (!anterior || !anterior.el || !anterior.el.isConnected) mapa.set(item.numero, item);
+      });
+    };
+
+    acrescentar();
+    if (alvo && mapa.has(alvo) && mapa.get(alvo).el && mapa.get(alvo).el.isConnected) {
+      return { mapa: mapa, item: mapa.get(alvo) };
+    }
+
+    const rolavel = localizar.containerDoMonitor(Array.from(mapa.values()));
+    if (!rolavel) return { mapa: mapa, item: null };
+
+    const topoOriginal = rolavel.scrollTop;
+    const passoDe = function () {
+      return Math.max(48, Math.floor((rolavel.clientHeight || 240) * 0.75));
+    };
+
+    const mover = async function (proximo) {
+      const topoAntes = rolavel.scrollTop;
+      rolavel.scrollTop = proximo;
+      dom.disparar(rolavel, 'scroll');
+      if (rolavel.scrollTop === topoAntes && proximo !== topoAntes) {
+        dom.disparar(rolavel, 'wheel', { deltaY: proximo > topoAntes ? passoDe() : -passoDe() });
+      }
+      if (espera) await NV.async.sleep(espera);
+    };
+
+    await mover(0);
+    acrescentar();
+    if (alvo && mapa.has(alvo) && mapa.get(alvo).el && mapa.get(alvo).el.isConnected) {
+      return { mapa: mapa, item: mapa.get(alvo) };
+    }
+
+    let semNovos = 0;
+    for (let i = 0; i < 80; i += 1) {
+      const antes = mapa.size;
+      const topoAntes = rolavel.scrollTop;
+      await mover(topoAntes + passoDe());
+      acrescentar();
+      if (alvo && mapa.has(alvo) && mapa.get(alvo).el && mapa.get(alvo).el.isConnected) {
+        return { mapa: mapa, item: mapa.get(alvo) };
+      }
+      const noFim = rolavel.scrollTop + rolavel.clientHeight >= rolavel.scrollHeight - 2;
+      const semMovimento = rolavel.scrollTop === topoAntes;
+      if (mapa.size === antes) semNovos += 1;
+      else semNovos = 0;
+      if (noFim && semNovos >= 1) break;
+      if (semNovos >= 3) break;
+      if (semMovimento && semNovos >= 2) break;
+    }
+
+    if (!alvo) {
+      rolavel.scrollTop = topoOriginal;
+      dom.disparar(rolavel, 'scroll');
+      if (espera) await NV.async.sleep(espera);
+    }
+    return { mapa: mapa, item: null };
+  }
+
+  localizar.coletarItensDoMonitor = async function (options) {
+    const varredura = await varrerMonitor(options);
+    return Array.from(varredura.mapa.values());
+  };
+
+  localizar.revelarItemDoMonitor = async function (numero, options) {
+    const varredura = await varrerMonitor(Object.assign({}, options || {}, { alvo: String(numero) }));
+    return varredura.item;
   };
 
   NV.localizar = localizar;
@@ -3214,10 +3437,17 @@
     return localizar.itensDoMonitor();
   };
 
+  /* Lista completa: rola a grade virtual do Monitor antes de montar o lote. */
+  lote.coletar = async function (options) {
+    if (localizar.coletarItensDoMonitor) return localizar.coletarItensDoMonitor(options);
+    return lote.listar();
+  };
+
   lote.abrirOs = async function (numero, tempos) {
-    const item = lote.listar().find(function (i) {
+    let item = lote.listar().find(function (i) {
       return i.numero === numero;
     });
+    if (!item && localizar.revelarItemDoMonitor) item = await localizar.revelarItemDoMonitor(numero);
     if (!item) throw new async.PassoError('OS ' + numero + ' não está mais na lista');
     dom.clicar(item.el);
     return async.waitFor(function () {
@@ -3238,7 +3468,14 @@
     const cfg = NV.config.obter();
     const preset = opts.preset || NV.config.presetAtivo();
     const sinal = opts.sinal || NV.fluxo.criarSinal();
-    const numeros = (opts.numeros || []).slice(0, cfg.lote.maximo);
+    const pedidos = opts.numeros || [];
+    const numeros = pedidos.slice(0, cfg.lote.maximo);
+    if (pedidos.length > numeros.length) {
+      NV.log.aviso(
+        'O lote classificou ' + numeros.length + ' de ' + pedidos.length +
+          ' chamados. O limite por vez está em ' + cfg.lote.maximo + '.'
+      );
+    }
     const itens = [];
     let opcoes = NV.config.servicosEmCache();
 
@@ -3298,7 +3535,14 @@
     const cfg = NV.config.obter();
     const preset = opts.preset || NV.config.presetAtivo();
     const sinal = opts.sinal || NV.fluxo.criarSinal();
-    const numeros = (opts.numeros || []).slice(0, cfg.lote.maximo);
+    const pedidos = opts.numeros || [];
+    const numeros = pedidos.slice(0, cfg.lote.maximo);
+    if (pedidos.length > numeros.length) {
+      NV.log.aviso(
+        'O lote fechou até ' + numeros.length + ' de ' + pedidos.length +
+          ' chamados. O limite por vez está em ' + cfg.lote.maximo + '.'
+      );
+    }
     const resultados = [];
 
     for (let i = 0; i < numeros.length; i += 1) {
@@ -4901,12 +5145,21 @@
   async function abrirLote() {
     const cfg = NV.config.obter();
     const preset = NV.config.presetAtivo() || {};
-    const itens = NV.lote.listar();
+    status('… lendo a lista do Monitor', 'trabalhando');
+    let itens = [];
+    try {
+      itens = await NV.lote.coletar();
+    } catch (erro) {
+      status('✗ ' + String(erro.message || erro), 'erro');
+      return;
+    }
     if (!itens.length) {
       status('Nenhuma OS encontrada na lista do Monitor de Atendimento', 'erro');
       return;
     }
+    status(itens.length + ' chamados na lista do Monitor');
     const automatico = !!preset.servicoAutomatico;
+    const acima = itens.length > cfg.lote.maximo;
     const html =
       '<div class="aviso">O modo lote abre cada OS, lança a ocorrência e fecha. ' +
       (automatico
@@ -4915,10 +5168,20 @@
         : 'Confirme antes que o preset é o correto para <b>todas</b> as OS marcadas.') +
       '</div>' +
       '<label class="campo">Preset aplicado<span class="badge">' + esc(preset.nome || '—') + '</span></label>' +
-      '<ul class="lista">' +
+      '<p class="aviso-inline"><b>' + itens.length + '</b> chamados na lista. ' +
+      (acima
+        ? 'O limite desta passada marca os primeiros <b>' + cfg.lote.maximo + '</b>. Aumente o número para classificar todos.'
+        : 'Todos já vêm marcados. Desmarque o que não deve entrar.') +
+      '</p>' +
+      '<div class="linha">' +
+      '<label class="campo">Máx. nesta passada<input type="number" min="1" max="500" data-maximo value="' + cfg.lote.maximo + '"></label>' +
+      '<button class="acao secundaria" data-marcar style="width:auto">Marcar até o limite</button>' +
+      '</div>' +
+      '<ul class="lista" style="max-height:360px">' +
       itens
-        .map(function (i) {
-          return '<li><input type="checkbox" value="' + esc(i.numero) + '"><span class="nome">OS ' + esc(i.numero) + '</span></li>';
+        .map(function (i, indice) {
+          const marcado = indice < cfg.lote.maximo ? ' checked' : '';
+          return '<li><input type="checkbox" value="' + esc(i.numero) + '"' + marcado + '><span class="nome">OS ' + esc(i.numero) + '</span></li>';
         })
         .join('') +
       '</ul>' +
@@ -4936,13 +5199,24 @@
       '<button class="acao secundaria" data-fechar>Cancelar</button><button class="acao" data-executar>Continuar</button>'
     );
 
+    sobre.querySelector('[data-marcar]').addEventListener('click', function () {
+      const limite = Math.max(1, Math.min(500, Number(sobre.querySelector('[data-maximo]').value) || cfg.lote.maximo));
+      sobre.querySelectorAll('ul.lista input[type="checkbox"]').forEach(function (box, indice) {
+        box.checked = indice < limite;
+      });
+    });
+
     sobre.querySelector('[data-executar]').addEventListener('click', async function () {
+      const limite = Math.max(1, Math.min(500, Number(sobre.querySelector('[data-maximo]').value) || cfg.lote.maximo));
       const numeros = Array.prototype.slice
         .call(sobre.querySelectorAll('ul.lista input[type="checkbox"]:checked'))
-        .map((c) => c.value);
+        .map((c) => c.value)
+        .slice(0, limite);
       if (!numeros.length) return;
       const revisar = automatico && sobre.querySelector('[data-revisar]').checked;
-      NV.config.aplicar({ lote: { pararNoPrimeiroErro: sobre.querySelector('[data-parar]').checked } });
+      NV.config.aplicar({
+        lote: { maximo: limite, pararNoPrimeiroErro: sobre.querySelector('[data-parar]').checked }
+      });
       sobre.remove();
 
       if (!revisar) {
@@ -5078,7 +5352,7 @@
       '</fieldset>' +
       '<fieldset><legend>Lote</legend>' +
       '<div class="grade3">' +
-      '<label class="campo">Máx. por lote<input type="number" data-c="lote.maximo" value="' + cfg.lote.maximo + '"></label>' +
+      '<label class="campo">Máx. por lote<input type="number" min="1" max="500" data-c="lote.maximo" value="' + cfg.lote.maximo + '"></label>' +
       '<label class="campo">Espera entre OS (ms)<input type="number" data-c="lote.esperaEntreOs" value="' + cfg.lote.esperaEntreOs + '"></label>' +
       '<label class="campo">&nbsp;' + check('lote.pararNoPrimeiroErro', 'Parar no 1º erro') + '</label>' +
       '</div>' +

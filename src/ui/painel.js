@@ -680,12 +680,21 @@
   async function abrirLote() {
     const cfg = NV.config.obter();
     const preset = NV.config.presetAtivo() || {};
-    const itens = NV.lote.listar();
+    status('… lendo a lista do Monitor', 'trabalhando');
+    let itens = [];
+    try {
+      itens = await NV.lote.coletar();
+    } catch (erro) {
+      status('✗ ' + String(erro.message || erro), 'erro');
+      return;
+    }
     if (!itens.length) {
       status('Nenhuma OS encontrada na lista do Monitor de Atendimento', 'erro');
       return;
     }
+    status(itens.length + ' chamados na lista do Monitor');
     const automatico = !!preset.servicoAutomatico;
+    const acima = itens.length > cfg.lote.maximo;
     const html =
       '<div class="aviso">O modo lote abre cada OS, lança a ocorrência e fecha. ' +
       (automatico
@@ -694,10 +703,20 @@
         : 'Confirme antes que o preset é o correto para <b>todas</b> as OS marcadas.') +
       '</div>' +
       '<label class="campo">Preset aplicado<span class="badge">' + esc(preset.nome || '—') + '</span></label>' +
-      '<ul class="lista">' +
+      '<p class="aviso-inline"><b>' + itens.length + '</b> chamados na lista. ' +
+      (acima
+        ? 'O limite desta passada marca os primeiros <b>' + cfg.lote.maximo + '</b>. Aumente o número para classificar todos.'
+        : 'Todos já vêm marcados. Desmarque o que não deve entrar.') +
+      '</p>' +
+      '<div class="linha">' +
+      '<label class="campo">Máx. nesta passada<input type="number" min="1" max="500" data-maximo value="' + cfg.lote.maximo + '"></label>' +
+      '<button class="acao secundaria" data-marcar style="width:auto">Marcar até o limite</button>' +
+      '</div>' +
+      '<ul class="lista" style="max-height:360px">' +
       itens
-        .map(function (i) {
-          return '<li><input type="checkbox" value="' + esc(i.numero) + '"><span class="nome">OS ' + esc(i.numero) + '</span></li>';
+        .map(function (i, indice) {
+          const marcado = indice < cfg.lote.maximo ? ' checked' : '';
+          return '<li><input type="checkbox" value="' + esc(i.numero) + '"' + marcado + '><span class="nome">OS ' + esc(i.numero) + '</span></li>';
         })
         .join('') +
       '</ul>' +
@@ -715,13 +734,24 @@
       '<button class="acao secundaria" data-fechar>Cancelar</button><button class="acao" data-executar>Continuar</button>'
     );
 
+    sobre.querySelector('[data-marcar]').addEventListener('click', function () {
+      const limite = Math.max(1, Math.min(500, Number(sobre.querySelector('[data-maximo]').value) || cfg.lote.maximo));
+      sobre.querySelectorAll('ul.lista input[type="checkbox"]').forEach(function (box, indice) {
+        box.checked = indice < limite;
+      });
+    });
+
     sobre.querySelector('[data-executar]').addEventListener('click', async function () {
+      const limite = Math.max(1, Math.min(500, Number(sobre.querySelector('[data-maximo]').value) || cfg.lote.maximo));
       const numeros = Array.prototype.slice
         .call(sobre.querySelectorAll('ul.lista input[type="checkbox"]:checked'))
-        .map((c) => c.value);
+        .map((c) => c.value)
+        .slice(0, limite);
       if (!numeros.length) return;
       const revisar = automatico && sobre.querySelector('[data-revisar]').checked;
-      NV.config.aplicar({ lote: { pararNoPrimeiroErro: sobre.querySelector('[data-parar]').checked } });
+      NV.config.aplicar({
+        lote: { maximo: limite, pararNoPrimeiroErro: sobre.querySelector('[data-parar]').checked }
+      });
       sobre.remove();
 
       if (!revisar) {
@@ -857,7 +887,7 @@
       '</fieldset>' +
       '<fieldset><legend>Lote</legend>' +
       '<div class="grade3">' +
-      '<label class="campo">Máx. por lote<input type="number" data-c="lote.maximo" value="' + cfg.lote.maximo + '"></label>' +
+      '<label class="campo">Máx. por lote<input type="number" min="1" max="500" data-c="lote.maximo" value="' + cfg.lote.maximo + '"></label>' +
       '<label class="campo">Espera entre OS (ms)<input type="number" data-c="lote.esperaEntreOs" value="' + cfg.lote.esperaEntreOs + '"></label>' +
       '<label class="campo">&nbsp;' + check('lote.pararNoPrimeiroErro', 'Parar no 1º erro') + '</label>' +
       '</div>' +

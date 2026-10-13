@@ -85,7 +85,7 @@
     lote: {
       habilitado: false,
       esperaEntreOs: 1500,
-      maximo: 25,
+      maximo: 200,
       pararNoPrimeiroErro: true
     },
     entradaDatas: 'auto',
@@ -177,7 +177,7 @@
    * porque a lista salva tem prioridade sobre a de fábrica. Cada migração roda
    * uma única vez, para não ressuscitar preset que o usuário apagou de propósito.
    */
-  const MIGRACOES = ['presets-servico-automatico'];
+  const MIGRACOES = ['presets-servico-automatico', 'lote-acima-de-25'];
 
   function aplicarMigracoes(cfg) {
     const feitas = Array.isArray(cfg.migracoes) ? cfg.migracoes.slice() : [];
@@ -192,6 +192,13 @@
       });
       if (faltando.length) novo.presets = novo.presets.concat(clonar(faltando));
       feitas.push('presets-servico-automatico');
+    }
+
+    /* O padrão antigo parava a leitura do lote em 25. Quem não mudou esse número
+       passa a classificar a fila inteira de um turno; um valor diferente foi escolha. */
+    if (feitas.indexOf('lote-acima-de-25') < 0) {
+      if (novo.lote && novo.lote.maximo === 25) novo.lote.maximo = 200;
+      feitas.push('lote-acima-de-25');
     }
 
     novo.migracoes = feitas;

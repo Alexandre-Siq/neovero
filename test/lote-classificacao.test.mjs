@@ -133,6 +133,19 @@ test('lê a lista de serviços da tela quando não há cache', async () => {
   assert.equal(modalAberto(), null, 'o modal deve ser fechado no Cancelar');
 });
 
+test('a passada de leitura percorre mais de 25 chamados', async () => {
+  configurarPadrao();
+  montarComDescricoes({ 202602691: 'impressora sem tonner' });
+  const numeros = ['202602691'];
+  for (let i = 0; i < 29; i += 1) numeros.push(String(202610000 + i));
+
+  const levantamento = await NV.lote.classificar({ numeros: numeros });
+
+  assert.equal(NV.config.obter().lote.maximo, 200);
+  assert.equal(levantamento.itens.length, 30, 'o limite antigo de 25 não pode cortar a fila');
+  assert.equal(levantamento.itens[0].servico, 'SUBSTITUIÇÃO DE TONNER/CILINDRO');
+});
+
 test('cancelar interrompe a passada de leitura', async () => {
   configurarPadrao();
   montarComDescricoes({ 202602691: 'impressora sem tonner', 202602690: 'computador nao liga' });

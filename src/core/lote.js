@@ -17,10 +17,17 @@
     return localizar.itensDoMonitor();
   };
 
+  /* Lista completa: rola a grade virtual do Monitor antes de montar o lote. */
+  lote.coletar = async function (options) {
+    if (localizar.coletarItensDoMonitor) return localizar.coletarItensDoMonitor(options);
+    return lote.listar();
+  };
+
   lote.abrirOs = async function (numero, tempos) {
-    const item = lote.listar().find(function (i) {
+    let item = lote.listar().find(function (i) {
       return i.numero === numero;
     });
+    if (!item && localizar.revelarItemDoMonitor) item = await localizar.revelarItemDoMonitor(numero);
     if (!item) throw new async.PassoError('OS ' + numero + ' não está mais na lista');
     dom.clicar(item.el);
     return async.waitFor(function () {
@@ -41,7 +48,14 @@
     const cfg = NV.config.obter();
     const preset = opts.preset || NV.config.presetAtivo();
     const sinal = opts.sinal || NV.fluxo.criarSinal();
-    const numeros = (opts.numeros || []).slice(0, cfg.lote.maximo);
+    const pedidos = opts.numeros || [];
+    const numeros = pedidos.slice(0, cfg.lote.maximo);
+    if (pedidos.length > numeros.length) {
+      NV.log.aviso(
+        'O lote classificou ' + numeros.length + ' de ' + pedidos.length +
+          ' chamados. O limite por vez está em ' + cfg.lote.maximo + '.'
+      );
+    }
     const itens = [];
     let opcoes = NV.config.servicosEmCache();
 
@@ -101,7 +115,14 @@
     const cfg = NV.config.obter();
     const preset = opts.preset || NV.config.presetAtivo();
     const sinal = opts.sinal || NV.fluxo.criarSinal();
-    const numeros = (opts.numeros || []).slice(0, cfg.lote.maximo);
+    const pedidos = opts.numeros || [];
+    const numeros = pedidos.slice(0, cfg.lote.maximo);
+    if (pedidos.length > numeros.length) {
+      NV.log.aviso(
+        'O lote fechou até ' + numeros.length + ' de ' + pedidos.length +
+          ' chamados. O limite por vez está em ' + cfg.lote.maximo + '.'
+      );
+    }
     const resultados = [];
 
     for (let i = 0; i < numeros.length; i += 1) {

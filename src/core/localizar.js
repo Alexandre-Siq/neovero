@@ -312,5 +312,101 @@
     });
   };
 
+  /* Grade do Monitor: o ancestral que realmente rola (a janela visível não é a fila inteira). */
+  localizar.containerDoMonitor = function (itens) {
+    const lista = itens && itens.length ? itens : localizar.itensDoMonitor();
+    if (!lista.length || !lista[0].el) return null;
+    let atual = lista[0].el;
+    for (let i = 0; i < 10 && atual; i += 1) {
+      if (atual.scrollHeight - atual.clientHeight > 16) return atual;
+      atual = atual.parentElement;
+    }
+    return null;
+  };
+
+  /*
+   * Percorre a lista do Monitor até o fim. DevExpress só desenha a janela visível;
+   * sem rolar, o lote só enxergava as primeiras OS da tela.
+   * options.alvo: para assim que esse número estiver renderizado (não volta o scroll).
+   * options.espera: pausa entre passos.
+   */
+  async function varrerMonitor(opcoes) {
+    const opts = opcoes || {};
+    const espera = opts.espera != null ? opts.espera : 40;
+    const alvo = opts.alvo ? String(opts.alvo) : null;
+    const mapa = new Map();
+
+    const acrescentar = function () {
+      localizar.itensDoMonitor().forEach(function (item) {
+        const anterior = mapa.get(item.numero);
+        if (!anterior || !anterior.el || !anterior.el.isConnected) mapa.set(item.numero, item);
+      });
+    };
+
+    acrescentar();
+    if (alvo && mapa.has(alvo) && mapa.get(alvo).el && mapa.get(alvo).el.isConnected) {
+      return { mapa: mapa, item: mapa.get(alvo) };
+    }
+
+    const rolavel = localizar.containerDoMonitor(Array.from(mapa.values()));
+    if (!rolavel) return { mapa: mapa, item: null };
+
+    const topoOriginal = rolavel.scrollTop;
+    const passoDe = function () {
+      return Math.max(48, Math.floor((rolavel.clientHeight || 240) * 0.75));
+    };
+
+    const mover = async function (proximo) {
+      const topoAntes = rolavel.scrollTop;
+      rolavel.scrollTop = proximo;
+      dom.disparar(rolavel, 'scroll');
+      if (rolavel.scrollTop === topoAntes && proximo !== topoAntes) {
+        dom.disparar(rolavel, 'wheel', { deltaY: proximo > topoAntes ? passoDe() : -passoDe() });
+      }
+      if (espera) await NV.async.sleep(espera);
+    };
+
+    await mover(0);
+    acrescentar();
+    if (alvo && mapa.has(alvo) && mapa.get(alvo).el && mapa.get(alvo).el.isConnected) {
+      return { mapa: mapa, item: mapa.get(alvo) };
+    }
+
+    let semNovos = 0;
+    for (let i = 0; i < 80; i += 1) {
+      const antes = mapa.size;
+      const topoAntes = rolavel.scrollTop;
+      await mover(topoAntes + passoDe());
+      acrescentar();
+      if (alvo && mapa.has(alvo) && mapa.get(alvo).el && mapa.get(alvo).el.isConnected) {
+        return { mapa: mapa, item: mapa.get(alvo) };
+      }
+      const noFim = rolavel.scrollTop + rolavel.clientHeight >= rolavel.scrollHeight - 2;
+      const semMovimento = rolavel.scrollTop === topoAntes;
+      if (mapa.size === antes) semNovos += 1;
+      else semNovos = 0;
+      if (noFim && semNovos >= 1) break;
+      if (semNovos >= 3) break;
+      if (semMovimento && semNovos >= 2) break;
+    }
+
+    if (!alvo) {
+      rolavel.scrollTop = topoOriginal;
+      dom.disparar(rolavel, 'scroll');
+      if (espera) await NV.async.sleep(espera);
+    }
+    return { mapa: mapa, item: null };
+  }
+
+  localizar.coletarItensDoMonitor = async function (options) {
+    const varredura = await varrerMonitor(options);
+    return Array.from(varredura.mapa.values());
+  };
+
+  localizar.revelarItemDoMonitor = async function (numero, options) {
+    const varredura = await varrerMonitor(Object.assign({}, options || {}, { alvo: String(numero) }));
+    return varredura.item;
+  };
+
   NV.localizar = localizar;
 })((globalThis.NV = globalThis.NV || {}));

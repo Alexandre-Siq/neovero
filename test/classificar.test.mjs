@@ -123,7 +123,37 @@ test('descrição vazia é reportada, não adivinhada', () => {
 test('sempre devolve alternativas ranqueadas para conferência', () => {
   const r = sugerir('impressora não imprime e está com erro de rede');
   assert.ok(r.alternativas.length >= 2);
-  assert.ok(r.alternativas[0].score >= r.alternativas[1].score);
+  assert.ok(r.alternativas[0].peso >= r.alternativas[1].peso);
+});
+
+test('tipos específicos de impressora vencem o erro genérico', () => {
+  assert.equal(sugerir('impressora pedindo para deslizar a pastilha').escolhido, 'IMPRESSORA PEDINDO PARA DESLIZAR PASTILHA');
+  assert.equal(sugerir('impressora prendendo papel e amassando').escolhido, 'IMPRESSORA PRENDENDO PAPEL / AMASSANDO');
+  assert.equal(sugerir('a impressora do 5º andar não imprime').escolhido, 'ERRO DE IMPRESSÃO');
+});
+
+test('criação de usuário e reset de senha do mesmo sistema não se confundem', () => {
+  assert.equal(sugerir('criar usuario no actio para a nova colaboradora').escolhido, 'CRIAÇÃO DE USUÁRIO ACTIO');
+  assert.equal(sugerir('a colaboradora esqueceu a senha do actio').escolhido, 'RESET DE SENHA ACTIO');
+  assert.equal(sugerir('resetar a senha do usuario do senior').escolhido, 'RESET DE SENHA SENIOR');
+  assert.equal(sugerir('criar usuario no fileserver do financeiro').escolhido, 'CRIAÇÃO DE USUÁRIO FILESERVER');
+});
+
+test('frases do catálogo caem no serviço correspondente', () => {
+  assert.equal(
+    sugerir('ensinar a utilizar o modulo mv soul').escolhido,
+    'ENSINAR COMO UTILIZAR MÓDULO MV SOUL/PEP/PORTARIA/CLASSIFICAÇÃO DE RISCO'
+  );
+  assert.equal(sugerir('erro no processo de faturamento').escolhido, 'ERRO DE PROCESSO');
+  assert.equal(sugerir('checagem dos equipamentos do setor').escolhido, 'CHECAGEM E VALIDAÇÃO DE EQUIPAMENTOS');
+  assert.equal(sugerir('configurar acesso ao senior da enfermagem').escolhido, 'CONFIGURAÇÃO DE ACESSO AO SENIOR');
+  assert.equal(sugerir('dúvida de como lançar no MV').escolhido, 'DUVIDA');
+});
+
+test('sem regra, o nome completo do serviço vence o tipo genérico', () => {
+  const r = classificar.sugerir('impressora pedindo para deslizar a pastilha', SERVICOS, { regras: [] });
+  assert.equal(r.origem, 'similaridade');
+  assert.equal(r.escolhido, 'IMPRESSORA PEDINDO PARA DESLIZAR PASTILHA');
 });
 
 test('só sugere serviço que existe na lista da tela', () => {

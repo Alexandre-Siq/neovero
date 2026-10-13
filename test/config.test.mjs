@@ -93,6 +93,18 @@ test('migração acrescenta presets novos a uma configuração antiga', () => {
   assert.equal(migrada.seletores.botaoFecharOs, 'button.icone-fechar', 'a calibração é preservada');
 });
 
+test('migração sobe o limite antigo de 25 chamados e preserva um limite escolhido', () => {
+  const antiga = config.aplicarMigracoes(config.mesclar(config.PADRAO, { lote: { maximo: 25 }, migracoes: ['presets-servico-automatico'] }));
+  assert.equal(antiga.lote.maximo, 200);
+
+  const escolhida = config.mesclar(config.PADRAO, { lote: { maximo: 40 }, migracoes: ['presets-servico-automatico'] });
+  assert.equal(config.aplicarMigracoes(escolhida).lote.maximo, 40);
+
+  const jaMigrada = config.aplicarMigracoes(antiga);
+  jaMigrada.lote.maximo = 25;
+  assert.equal(config.aplicarMigracoes(jaMigrada).lote.maximo, 25, 'não reaplica depois que o usuário volta para 25');
+});
+
 test('migração não roda duas vezes', () => {
   const cfg = config.aplicarMigracoes(config.mesclar(config.PADRAO, { presets: [], migracoes: [] }));
   const quantidade = cfg.presets.length;

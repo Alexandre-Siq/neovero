@@ -62,6 +62,8 @@
     'ERRO DE PROCESSO',
     'ESTUDO/LEVANTAMENTO PARA PROJETO',
     'EXECUÇÃO DE PROJETO',
+    'IMPRESSORA PEDINDO PARA DESLIZAR PASTILHA',
+    'IMPRESSORA PRENDENDO PAPEL / AMASSANDO',
     'INSTALAÇÃO DE EQUIPAMENTO',
     'INSTALAÇÃO DE SOFTWARE OU APP',
     'INSTALAR/CONFIGURAR RIS-PACS',
@@ -159,7 +161,35 @@
     { quando: ['nova aba', 'nova tela', 'novo campo', 'adicionar campo', 'nova funcionalidade'], servico: 'DESENVOLVIMENTO DE TELAS MVPEP' },
     { quando: ['novo relatorio', 'relatorio personalizado', 'relatorio customizado'], servico: 'DESENVOLVIMENTO DE RELATÓRIOS PERSONALIZADOS MV' },
     { quando: ['levantamento', 'estudo de viabilidade'], servico: 'ESTUDO/LEVANTAMENTO PARA PROJETO' },
-    { quando: ['possibilidade de', 'sugestao de melhoria', 'avaliar a possibilidade'], servico: 'ANALISE DE SISTEMA', peso: -1 }
+    { quando: ['possibilidade de', 'sugestao de melhoria', 'avaliar a possibilidade'], servico: 'ANALISE DE SISTEMA', peso: -1 },
+    /* Tipos que a lista tem e o texto do chamado quase nunca repete palavra por palavra. */
+    { quando: ['deslizar pastilha', 'pastilha'], servico: 'IMPRESSORA PEDINDO PARA DESLIZAR PASTILHA', peso: 1 },
+    { quando: ['prendendo papel', 'prende papel', 'papel preso', 'papel amassado', 'amassando papel', 'amassando', 'atolamento', 'atolando'], servico: 'IMPRESSORA PRENDENDO PAPEL / AMASSANDO', peso: 1 },
+    { quando: ['criar usuario+sau', 'novo usuario+sau', 'cadastrar usuario+sau'], servico: 'CRIAÇÃO DE USUARIO (SAU)' },
+    { quando: ['criar usuario+actio', 'novo usuario+actio', 'cadastrar usuario+actio'], servico: 'CRIAÇÃO DE USUÁRIO ACTIO' },
+    { quando: ['criar usuario+fileserver', 'criar usuario+file server', 'novo usuario+fileserver', 'novo usuario+file server'], servico: 'CRIAÇÃO DE USUÁRIO FILESERVER' },
+    { quando: ['criar usuario+neovero', 'novo usuario+neovero', 'cadastrar usuario+neovero'], servico: 'CRIAÇÃO DE USUÁRIO NEOVERO' },
+    { quando: ['criar usuario+intranet', 'novo usuario+intranet'], servico: 'CRIAÇÃO DE USUÁRIO INTRANET' },
+    { quando: ['senha+actio', 'reset+actio'], servico: 'RESET DE SENHA ACTIO', peso: 1 },
+    { quando: ['senha+sau', 'reset+sau'], servico: 'RESET DE SENHA (SAU)', peso: 1 },
+    { quando: ['senha+senior', 'reset+senior'], servico: 'RESET DE SENHA SENIOR', peso: 1 },
+    { quando: ['senha+neovero', 'reset+neovero'], servico: 'RESET DE SENHA NEOVERO', peso: 1 },
+    { quando: ['senha+callcenter', 'reset+callcenter'], servico: 'RESET DE SENHA CALLCENTER', peso: 1 },
+    { quando: ['senha+email', 'senha+e-mail', 'reset+email', 'reset+e-mail'], servico: 'RESET DE SENHA DE E-MAIL', peso: 1 },
+    { quando: ['ensinar', 'treinamento', 'como utilizar', 'como usar o modulo'], servico: 'ENSINAR COMO UTILIZAR MÓDULO MV SOUL/PEP/PORTARIA/CLASSIFICAÇÃO DE RISCO', peso: 1 },
+    { quando: ['erro+processo', 'erro de processo', 'processo errado'], servico: 'ERRO DE PROCESSO' },
+    { quando: ['executar o projeto', 'executar projeto', 'execucao de projeto'], servico: 'EXECUÇÃO DE PROJETO' },
+    { quando: ['adequar o projeto', 'adequar projeto', 'adequacao de projeto'], servico: 'ADEQUAÇÃO DE PROJETO' },
+    { quando: ['cancelar atendimento', 'cancelamento de atendimento', 'cancelar o chamado'], servico: 'CANCELAMENTO DE ATENDIMENTO' },
+    { quando: ['checagem', 'validar equipamento', 'validacao de equipamento', 'checar equipamento'], servico: 'CHECAGEM E VALIDAÇÃO DE EQUIPAMENTOS' },
+    { quando: ['configurar o software', 'configurar software', 'configurar o programa', 'configuracao de software'], servico: 'CONFIGURAÇÃO DE SOFTWARE' },
+    { quando: ['configurar equipamento', 'configuracao de equipamento'], servico: 'CONFIGURAÇÃO DE EQUIPAMENTOS' },
+    { quando: ['parametro do mv', 'parametros do mv', 'configuracoes mv', 'configuracoes do mv'], servico: 'CONFIGURAÇÕES MV' },
+    { quando: ['configuracoes da intranet', 'configuracoes intranet', 'configurar a intranet'], servico: 'CONFIGURAÇÕES INTRANET' },
+    { quando: ['configurar usuario na intranet', 'configurar usuario intranet'], servico: 'CONFIGURAÇÃO DE USUÁRIO NA INTRANET' },
+    { quando: ['grupo de acesso', 'grupos de pasta', 'grupos de pastas', 'permissao de grupo'], servico: 'CONFIGURAÇÃO DE GRUPOS PARA ACESSOS DE PASTAS FILESERVER' },
+    { quando: ['configurar acesso+senior'], servico: 'CONFIGURAÇÃO DE ACESSO AO SENIOR' },
+    { quando: ['acesso do usuario+pasta', 'permissao de pasta'], servico: 'CONFIGURAÇÃO DE USUARIO PARA ACESSO A PASTAS DO FILE SERVER' }
   ];
 
   const STOPWORDS = [
@@ -213,6 +243,12 @@
    * plural e longa aceita qualquer terminação ("travado" pega "travados").
    */
   function contem(descricaoNormalizada, chave) {
+    /* "senha+actio" exige as duas partes, em qualquer ordem e sem serem vizinhas. */
+    const bruto = String(chave || '');
+    if (bruto.indexOf('+') >= 0) {
+      const partes = bruto.split('+').map(function (p) { return p.trim(); }).filter(Boolean);
+      return partes.length > 0 && partes.every(function (p) { return contem(descricaoNormalizada, p); });
+    }
     const alvo = text.normalize(chave).replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
     if (!alvo) return false;
     const palavras = alvo.split(' ');
@@ -223,21 +259,91 @@
   }
   classificar.contem = contem;
 
-  /* 0..1 — proporção das palavras do nome do serviço presentes na descrição. */
-  classificar.pontuar = function (descricao, opcao) {
-    const raizesOpcao = classificar.raizes(opcao);
-    if (!raizesOpcao.length) return 0;
-    const raizesDescricao = classificar.raizes(descricao);
-    if (!raizesDescricao.length) return 0;
-    let acertos = 0;
-    raizesOpcao.forEach(function (r) {
-      const bateu = raizesDescricao.some(function (d) {
-        return d === r || (r.length >= 4 && d.indexOf(r) === 0) || (d.length >= 4 && r.indexOf(d) === 0);
+  /* Quantas vezes cada radical aparece na lista. Palavra rara ("pastilha") pesa mais que "equipamento". */
+  classificar.indice = function (lista) {
+    const df = Object.create(null);
+    let n = 0;
+    (lista || []).forEach(function (opcao) {
+      const raizes = classificar.raizes(opcao);
+      if (!raizes.length) return;
+      n += 1;
+      const visto = Object.create(null);
+      raizes.forEach(function (r) {
+        if (visto[r]) return;
+        visto[r] = true;
+        df[r] = (df[r] || 0) + 1;
       });
-      if (bateu) acertos += 1;
     });
-    return acertos / raizesOpcao.length;
+    return { n: n, df: df };
   };
+
+  classificar.pesoRaiz = function (raiz, indice) {
+    if (!indice || !indice.n) return 1;
+    const df = indice.df[raiz] || 1;
+    return Math.log((indice.n + 1) / (df + 0.5));
+  };
+
+  /*
+   * Igualdade de radical, com folga curta para o que o stemmer não tirou
+   * ("impress" / "impresso"). Radical curto só casa inteiro: "java" não é "javascript".
+   */
+  function raizBate(raizOpcao, raizDescricao) {
+    if (raizDescricao === raizOpcao) return true;
+    const menor = raizOpcao.length <= raizDescricao.length ? raizOpcao : raizDescricao;
+    const maior = raizOpcao.length <= raizDescricao.length ? raizDescricao : raizOpcao;
+    if (menor.length < 5) return false;
+    if (maior.indexOf(menor) !== 0) return false;
+    return maior.length - menor.length <= 2;
+  }
+
+  /*
+   * score: fração do nome do serviço coberta pela descrição (0..1), com palavra rara
+   * valendo mais. peso: soma absoluta desses acertos — desempata a favor do serviço
+   * mais específico ("impressora de senha" vence "impressora" quando os dois cabem).
+   */
+  classificar.detalhar = function (descricao, opcao, indice) {
+    const raizesOpcao = classificar.raizes(opcao);
+    const raizesDescricao = classificar.raizes(descricao);
+    if (!raizesOpcao.length || !raizesDescricao.length) return { score: 0, peso: 0 };
+    let pesoTotal = 0;
+    let pesoAcertos = 0;
+    raizesOpcao.forEach(function (r) {
+      const peso = classificar.pesoRaiz(r, indice);
+      pesoTotal += peso;
+      const bateu = raizesDescricao.some(function (d) {
+        return raizBate(r, d);
+      });
+      if (bateu) pesoAcertos += peso;
+    });
+    if (!pesoTotal) return { score: 0, peso: 0 };
+    return { score: pesoAcertos / pesoTotal, peso: pesoAcertos };
+  };
+
+  /* 0..1 — proporção (ponderada) das palavras do nome do serviço presentes na descrição. */
+  classificar.pontuar = function (descricao, opcao, indice) {
+    return classificar.detalhar(descricao, opcao, indice).score;
+  };
+
+  /* Senha e criação de usuário disputam o mesmo sistema; o verbo da descrição desempata. */
+  function bonusDeIntencao(descricaoNormalizada, servico) {
+    const nome = text.normalize(servico);
+    let bonus = 0;
+    if (
+      contem(descricaoNormalizada, 'senha') ||
+      contem(descricaoNormalizada, 'resetar') ||
+      contem(descricaoNormalizada, 'esqueci')
+    ) {
+      if (nome.indexOf('reset de senha') === 0) bonus += 30;
+    }
+    if (
+      contem(descricaoNormalizada, 'criar+usuario') ||
+      contem(descricaoNormalizada, 'novo+usuario') ||
+      contem(descricaoNormalizada, 'cadastrar+usuario')
+    ) {
+      if (nome.indexOf('criacao de usuario') === 0) bonus += 30;
+    }
+    return bonus;
+  }
 
   /*
    * Mesmo serviço escrito de outro jeito: "TONNER/CILINDRO" e "TONNER E CILINDRO"
@@ -325,14 +431,21 @@
     const descricaoNormalizada = text.normalize(descricao).replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
 
     /* Ranking por semelhança, sempre calculado (serve de alternativa mesmo com regra). */
+    const indice = classificar.indice(lista);
     const ranking = lista
       .map(function (opcao) {
-        return { opcao: opcao, score: Number(classificar.pontuar(descricao, opcao).toFixed(3)) };
+        const detalhe = classificar.detalhar(descricao, opcao, indice);
+        return {
+          opcao: opcao,
+          score: Number(detalhe.score.toFixed(3)),
+          peso: Number(detalhe.peso.toFixed(3))
+        };
       })
       .filter(function (r) {
         return r.score > 0;
       })
       .sort(function (a, b) {
+        if (b.peso !== a.peso) return b.peso - a.peso;
         if (b.score !== a.score) return b.score - a.score;
         return a.opcao.length - b.opcao.length;
       });
@@ -344,7 +457,10 @@
       if (!regra || !regra.servico) return;
       (regra.quando || []).forEach(function (chave) {
         if (!contem(descricaoNormalizada, chave)) return;
-        const tamanho = text.normalize(chave).length + (Number(regra.peso) || 0) * 10;
+        const tamanho =
+          text.normalize(chave).length +
+          (Number(regra.peso) || 0) * 10 +
+          bonusDeIntencao(descricaoNormalizada, regra.servico);
         if (!melhorRegra || tamanho > melhorRegra.tamanho) {
           melhorRegra = { servico: regra.servico, chave: chave, tamanho: tamanho };
         }
@@ -374,10 +490,14 @@
       }
     }
 
-    /* Camada 2: semelhança. */
-    if (ranking.length && ranking[0].score >= minimo) {
-      resultado.escolhido = ranking[0].opcao;
-      resultado.confianca = ranking[0].score;
+    /* Camada 2: semelhança. O ranking privilegia o serviço mais específico; só entra
+       quem cobre o bastante do próprio nome para não cair num "equipamento" genérico. */
+    const porSemelhanca = ranking.filter(function (r) {
+      return r.score >= minimo;
+    })[0];
+    if (porSemelhanca) {
+      resultado.escolhido = porSemelhanca.opcao;
+      resultado.confianca = porSemelhanca.score;
       resultado.origem = 'similaridade';
       return resultado;
     }
