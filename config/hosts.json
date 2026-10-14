@@ -1,0 +1,12 @@
+{
+  "comentario": [
+    "Enderecos onde o script deve ser injetado, no formato @match do Tampermonkey.",
+    "O curinga *.neovero.com ja cobre https://ishaoc.neovero.com/UI/Base/Menu.aspx#/.",
+    "Se o Neovero da sua empresa estiver em outro dominio, acrescente aqui e rode 'npm run build'."
+  ],
+  "matches": [
+    "*://ishaoc.neovero.com/*",
+    "*://*.neovero.com/*",
+    "*://neovero.com/*"
+  ]
+}
