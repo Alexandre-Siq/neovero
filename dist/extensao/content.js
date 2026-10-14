@@ -2867,30 +2867,57 @@
   }
   fluxo.unirServicos = unirServicos;
 
+  /*
+   * Acrescenta o catálogo conhecido ao que foi lido ou guardado.
+   * A primeira página do combo do Neovero termina em "CONFIGURAÇÃO DE RIS/PACS FIDI".
+   * Um cache dessa fatia faz o seletor da revisão parar ali e a regra de tonner,
+   * reset de senha ou verificação não achar o serviço.
+   */
+  fluxo.completarServicos = function (lista) {
+    if (!lista || !lista.length) return [];
+    return unirServicos(lista, NV.classificar.SERVICOS_CONHECIDOS);
+  };
+
+  function gravarSeCresceu(antes, finais, mensagem) {
+    if (finais.length > antes.length) {
+      NV.config.definirCacheServicos(finais);
+      NV.log.aviso(mensagem, {
+        antes: antes.length,
+        agora: finais.length,
+        paravaEm: antes[antes.length - 1] || ''
+      });
+    }
+  }
+
   fluxo.opcoesDeServico = async function (modal, options) {
     const opts = options || {};
+    const referencia = NV.classificar.SERVICOS_CONHECIDOS;
     if (!opts.forcarLeitura) {
       const cache = NV.config.servicosEmCache();
-      if (cache.length) return { opcoes: cache, origem: 'cache' };
+      if (cache.length) {
+        const finais = fluxo.completarServicos(cache);
+        gravarSeCresceu(cache, finais, 'O cache de serviços parava cedo; completei com o catálogo');
+        return { opcoes: finais, origem: 'cache', parcial: finais.length > cache.length };
+      }
     }
     const el = localizar.campoServico(modal);
     if (!el) throw new async.PassoError('Campo "Serviço" não encontrado para ler as opções');
     const lidas = (await campos.listarOpcoes(el, { rotulo: 'Serviço' })) || [];
 
     /*
-     * Rede de segurança: se a lista veio muito menor que a de referência, a leitura
-     * provavelmente pegou só a janela visível do combo. Classificar com meia lista
-     * escolhe o serviço errado calado, então completamos e avisamos.
+     * Rede de segurança: a leitura pode pegar só a janela visível do combo.
+     * Classificar com meia lista escolhe o serviço errado, então o que faltar
+     * no catálogo conhecido entra mesmo quando a fatia já passou de 60%.
      */
-    const referencia = NV.classificar.SERVICOS_CONHECIDOS;
-    const parcial = lidas.length > 0 && lidas.length < Math.round(referencia.length * 0.6);
-    const finais = parcial ? unirServicos(lidas, referencia) : lidas;
+    const finais = lidas.length ? fluxo.completarServicos(lidas) : lidas;
+    const parcial = lidas.length > 0 && finais.length > lidas.length;
 
     if (parcial) {
       NV.log.aviso('A lista de serviços lida parece incompleta; completei com a lista de referência', {
         lidos: lidas.length,
         referencia: referencia.length,
-        total: finais.length
+        total: finais.length,
+        paravaEm: lidas[lidas.length - 1] || ''
       });
     }
     if (finais.length) NV.config.definirCacheServicos(finais);
@@ -3507,6 +3534,11 @@
     }
     const itens = [];
     let opcoes = NV.config.servicosEmCache();
+    if (opcoes.length && NV.fluxo.completarServicos) {
+      const completas = NV.fluxo.completarServicos(opcoes);
+      if (completas.length > opcoes.length) NV.config.definirCacheServicos(completas);
+      opcoes = completas;
+    }
 
     for (let i = 0; i < numeros.length; i += 1) {
       if (sinal.cancelado) break;
@@ -4167,6 +4199,8 @@
   }
   textarea { min-height: 56px; resize: vertical; }
   select:focus, input:focus, textarea:focus { outline: 2px solid #10b981; outline-offset: -1px; }
+  select[size] { height: 12em; overflow: auto; padding: 0; }
+  select[size] option { padding: 5px 8px; }
 
   button.acao {
     border: 0; border-radius: 9px; padding: 10px 12px; font-size: 13px; font-weight: 700;
@@ -4751,7 +4785,6 @@
           return !filtro || NV.text.normalize(o).indexOf(filtro) >= 0;
         });
         listaTodos.innerHTML = itens
-          .slice(0, 60)
           .map(function (o) {
             return '<li><span class="nome">' + esc(o) + '</span><button class="acao" data-opcao="' + esc(o) + '">Usar</button></li>';
           })
@@ -5242,8 +5275,13 @@
         return !i.descricao;
       }).length;
 
+      const listaServicos = (function () {
+        const base = NV.fluxo.completarServicos ? NV.fluxo.completarServicos(opcoes || []) : opcoes || [];
+        return base.length ? base : NV.classificar.SERVICOS_CONHECIDOS.slice();
+      })();
+
       const opcoesHtml = function (selecionado) {
-        return (opcoes || [])
+        return listaServicos
           .map(function (o) {
             return '<option value="' + esc(o) + '"' + (o === selecionado ? ' selected' : '') + '>' + esc(o) + '</option>';
           })
@@ -5279,10 +5317,14 @@
             '</span>' +
             '<span class="badge" style="color:' + cor + '">' + esc(item.origem || '—') + ' ' + confianca + '</span>' +
             '</div>' +
-            '<select data-os="' + esc(item.numero) + '" data-original="' + esc(item.servico || '') + '" style="margin-top:6px">' +
+            '<label class="campo" style="text-transform:none;letter-spacing:0;margin-top:8px">Buscar serviço' +
+            '<input type="search" data-filtro placeholder="tonner, pastilha, reset, senha…"></label>' +
+            '<select data-os="' + esc(item.numero) + '" data-original="' + esc(item.servico || '') + '" size="8" style="margin-top:6px">' +
             '<option value="">— não fechar esta OS —</option>' +
             opcoesHtml(item.servico) +
             '</select>' +
+            '<p class="aviso-inline" style="margin:6px 0 0">Serviço desta OS: <b data-escolhido>' +
+            esc(item.servico || 'nenhum') + '</b></p>' +
             '<label class="check" data-aprender-linha style="display:none;margin-top:6px">' +
             '<input type="checkbox" data-aprender checked>' +
             '<span>Gravar regra <input type="text" data-palavra value="' + esc(palavra) +
@@ -5303,7 +5345,8 @@
           : '') +
         '<div class="' + (semDescricao ? 'aviso' : 'aviso-inline') + '">' +
         (duvidosos.length
-          ? '<b>' + duvidosos.length + '</b> para conferir.' +
+          ? '<b>' + duvidosos.length + '</b> para conferir. A lista tem <b>' + listaServicos.length +
+            '</b> serviços — role ou busque (tonner, pastilha, reset).' +
             (semDescricao ? ' <b>' + semDescricao + '</b> sem descrição lida.' : ' Trocar o serviço grava uma regra para a próxima.')
           : 'Nenhum chamado duvidoso. Os de regra firme seguem com o serviço da regra.') +
         '</div>' +
@@ -5318,11 +5361,29 @@
           '</button>'
       );
 
+      sobre.addEventListener('input', function (ev) {
+        const campo = ev.target;
+        if (!campo.dataset || campo.dataset.filtro === undefined) return;
+        const linha = campo.closest('li');
+        const sel = linha && linha.querySelector('select');
+        if (!sel) return;
+        const q = NV.text.normalize(campo.value);
+        Array.prototype.forEach.call(sel.options, function (opt) {
+          if (!opt.value) {
+            opt.hidden = false;
+            return;
+          }
+          opt.hidden = !!(q && NV.text.normalize(opt.textContent).indexOf(q) < 0);
+        });
+      });
+
       sobre.addEventListener('change', function (ev) {
         const sel = ev.target;
         if (!sel.dataset || sel.tagName !== 'SELECT' || sel.dataset.os === undefined) return;
         const linha = sel.closest('li');
         const aprender = linha && linha.querySelector('[data-aprender-linha]');
+        const rotulo = linha && linha.querySelector('[data-escolhido]');
+        if (rotulo) rotulo.textContent = sel.value || 'nenhum';
         if (!aprender) return;
         const mudou = !!(sel.value && sel.value !== sel.dataset.original);
         aprender.style.display = mudou ? 'flex' : 'none';

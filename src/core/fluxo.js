@@ -117,30 +117,57 @@
   }
   fluxo.unirServicos = unirServicos;
 
+  /*
+   * Acrescenta o catálogo conhecido ao que foi lido ou guardado.
+   * A primeira página do combo do Neovero termina em "CONFIGURAÇÃO DE RIS/PACS FIDI".
+   * Um cache dessa fatia faz o seletor da revisão parar ali e a regra de tonner,
+   * reset de senha ou verificação não achar o serviço.
+   */
+  fluxo.completarServicos = function (lista) {
+    if (!lista || !lista.length) return [];
+    return unirServicos(lista, NV.classificar.SERVICOS_CONHECIDOS);
+  };
+
+  function gravarSeCresceu(antes, finais, mensagem) {
+    if (finais.length > antes.length) {
+      NV.config.definirCacheServicos(finais);
+      NV.log.aviso(mensagem, {
+        antes: antes.length,
+        agora: finais.length,
+        paravaEm: antes[antes.length - 1] || ''
+      });
+    }
+  }
+
   fluxo.opcoesDeServico = async function (modal, options) {
     const opts = options || {};
+    const referencia = NV.classificar.SERVICOS_CONHECIDOS;
     if (!opts.forcarLeitura) {
       const cache = NV.config.servicosEmCache();
-      if (cache.length) return { opcoes: cache, origem: 'cache' };
+      if (cache.length) {
+        const finais = fluxo.completarServicos(cache);
+        gravarSeCresceu(cache, finais, 'O cache de serviços parava cedo; completei com o catálogo');
+        return { opcoes: finais, origem: 'cache', parcial: finais.length > cache.length };
+      }
     }
     const el = localizar.campoServico(modal);
     if (!el) throw new async.PassoError('Campo "Serviço" não encontrado para ler as opções');
     const lidas = (await campos.listarOpcoes(el, { rotulo: 'Serviço' })) || [];
 
     /*
-     * Rede de segurança: se a lista veio muito menor que a de referência, a leitura
-     * provavelmente pegou só a janela visível do combo. Classificar com meia lista
-     * escolhe o serviço errado calado, então completamos e avisamos.
+     * Rede de segurança: a leitura pode pegar só a janela visível do combo.
+     * Classificar com meia lista escolhe o serviço errado, então o que faltar
+     * no catálogo conhecido entra mesmo quando a fatia já passou de 60%.
      */
-    const referencia = NV.classificar.SERVICOS_CONHECIDOS;
-    const parcial = lidas.length > 0 && lidas.length < Math.round(referencia.length * 0.6);
-    const finais = parcial ? unirServicos(lidas, referencia) : lidas;
+    const finais = lidas.length ? fluxo.completarServicos(lidas) : lidas;
+    const parcial = lidas.length > 0 && finais.length > lidas.length;
 
     if (parcial) {
       NV.log.aviso('A lista de serviços lida parece incompleta; completei com a lista de referência', {
         lidos: lidas.length,
         referencia: referencia.length,
-        total: finais.length
+        total: finais.length,
+        paravaEm: lidas[lidas.length - 1] || ''
       });
     }
     if (finais.length) NV.config.definirCacheServicos(finais);

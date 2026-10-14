@@ -58,6 +58,11 @@
     }
     const itens = [];
     let opcoes = NV.config.servicosEmCache();
+    if (opcoes.length && NV.fluxo.completarServicos) {
+      const completas = NV.fluxo.completarServicos(opcoes);
+      if (completas.length > opcoes.length) NV.config.definirCacheServicos(completas);
+      opcoes = completas;
+    }
 
     for (let i = 0; i < numeros.length; i += 1) {
       if (sinal.cancelado) break;

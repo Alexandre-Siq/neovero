@@ -229,7 +229,6 @@
           return !filtro || NV.text.normalize(o).indexOf(filtro) >= 0;
         });
         listaTodos.innerHTML = itens
-          .slice(0, 60)
           .map(function (o) {
             return '<li><span class="nome">' + esc(o) + '</span><button class="acao" data-opcao="' + esc(o) + '">Usar</button></li>';
           })
@@ -720,8 +719,13 @@
         return !i.descricao;
       }).length;
 
+      const listaServicos = (function () {
+        const base = NV.fluxo.completarServicos ? NV.fluxo.completarServicos(opcoes || []) : opcoes || [];
+        return base.length ? base : NV.classificar.SERVICOS_CONHECIDOS.slice();
+      })();
+
       const opcoesHtml = function (selecionado) {
-        return (opcoes || [])
+        return listaServicos
           .map(function (o) {
             return '<option value="' + esc(o) + '"' + (o === selecionado ? ' selected' : '') + '>' + esc(o) + '</option>';
           })
@@ -757,10 +761,14 @@
             '</span>' +
             '<span class="badge" style="color:' + cor + '">' + esc(item.origem || '—') + ' ' + confianca + '</span>' +
             '</div>' +
-            '<select data-os="' + esc(item.numero) + '" data-original="' + esc(item.servico || '') + '" style="margin-top:6px">' +
+            '<label class="campo" style="text-transform:none;letter-spacing:0;margin-top:8px">Buscar serviço' +
+            '<input type="search" data-filtro placeholder="tonner, pastilha, reset, senha…"></label>' +
+            '<select data-os="' + esc(item.numero) + '" data-original="' + esc(item.servico || '') + '" size="8" style="margin-top:6px">' +
             '<option value="">— não fechar esta OS —</option>' +
             opcoesHtml(item.servico) +
             '</select>' +
+            '<p class="aviso-inline" style="margin:6px 0 0">Serviço desta OS: <b data-escolhido>' +
+            esc(item.servico || 'nenhum') + '</b></p>' +
             '<label class="check" data-aprender-linha style="display:none;margin-top:6px">' +
             '<input type="checkbox" data-aprender checked>' +
             '<span>Gravar regra <input type="text" data-palavra value="' + esc(palavra) +
@@ -781,7 +789,8 @@
           : '') +
         '<div class="' + (semDescricao ? 'aviso' : 'aviso-inline') + '">' +
         (duvidosos.length
-          ? '<b>' + duvidosos.length + '</b> para conferir.' +
+          ? '<b>' + duvidosos.length + '</b> para conferir. A lista tem <b>' + listaServicos.length +
+            '</b> serviços — role ou busque (tonner, pastilha, reset).' +
             (semDescricao ? ' <b>' + semDescricao + '</b> sem descrição lida.' : ' Trocar o serviço grava uma regra para a próxima.')
           : 'Nenhum chamado duvidoso. Os de regra firme seguem com o serviço da regra.') +
         '</div>' +
@@ -796,11 +805,29 @@
           '</button>'
       );
 
+      sobre.addEventListener('input', function (ev) {
+        const campo = ev.target;
+        if (!campo.dataset || campo.dataset.filtro === undefined) return;
+        const linha = campo.closest('li');
+        const sel = linha && linha.querySelector('select');
+        if (!sel) return;
+        const q = NV.text.normalize(campo.value);
+        Array.prototype.forEach.call(sel.options, function (opt) {
+          if (!opt.value) {
+            opt.hidden = false;
+            return;
+          }
+          opt.hidden = !!(q && NV.text.normalize(opt.textContent).indexOf(q) < 0);
+        });
+      });
+
       sobre.addEventListener('change', function (ev) {
         const sel = ev.target;
         if (!sel.dataset || sel.tagName !== 'SELECT' || sel.dataset.os === undefined) return;
         const linha = sel.closest('li');
         const aprender = linha && linha.querySelector('[data-aprender-linha]');
+        const rotulo = linha && linha.querySelector('[data-escolhido]');
+        if (rotulo) rotulo.textContent = sel.value || 'nenhum';
         if (!aprender) return;
         const mudou = !!(sel.value && sel.value !== sel.dataset.original);
         aprender.style.display = mudou ? 'flex' : 'none';

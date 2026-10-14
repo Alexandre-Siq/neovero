@@ -59,6 +59,24 @@ test('a passada de leitura classifica cada OS sem alterar nada', async () => {
   assert.equal(modalAberto(), null, 'o modal não deve ficar aberto');
 });
 
+test('lote com cache que para em RIS/PACS ainda acha tonner e verificação', async () => {
+  const corte = SERVICOS.indexOf('CONFIGURAÇÃO DE RIS/PACS FIDI');
+  configurarPadrao({
+    cacheServicos: { valores: SERVICOS.slice(0, corte + 1), atualizadoEm: '2026-08-28T00:00:00.000Z' }
+  });
+  montarComDescricoes({ 202602691: 'impressora sem tonner na recepção' });
+
+  const levantamento = await NV.lote.classificar({ numeros: ['202602691'] });
+
+  assert.equal(levantamento.itens[0].servico, 'SUBSTITUIÇÃO DE TONNER/CILINDRO');
+  assert.equal(levantamento.itens[0].origem, 'regra');
+  assert.ok(levantamento.opcoes.includes('VERIFICAÇÃO DE EQUIPAMENTO'));
+  assert.ok(
+    levantamento.opcoes.indexOf('VERIFICAÇÃO DE EQUIPAMENTO') >
+      levantamento.opcoes.indexOf('CONFIGURAÇÃO DE RIS/PACS FIDI')
+  );
+});
+
 test('o lote fecha cada OS com o serviço revisado', async () => {
   configurarPadrao();
   const app = montarComDescricoes({

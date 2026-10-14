@@ -111,6 +111,29 @@ test('leitura curta é completada com a lista de referência e avisada', async (
   if (cancelar) NV.dom.clicar(cancelar);
 });
 
+test('cache que para em RIS/PACS ganha o resto do catálogo', async () => {
+  const corte = SERVICOS.indexOf('CONFIGURAÇÃO DE RIS/PACS FIDI');
+  assert.ok(corte > 10);
+  const fatia = SERVICOS.slice(0, corte + 1);
+  configurarPadrao({
+    cacheServicos: { valores: fatia, atualizadoEm: '2026-08-28T00:00:00.000Z' }
+  });
+
+  const saida = await NV.fluxo.opcoesDeServico(null);
+
+  assert.equal(saida.origem, 'cache');
+  assert.equal(saida.parcial, true);
+  assert.ok(saida.opcoes.indexOf('CONFIGURAÇÃO DE SOFTWARE') > saida.opcoes.indexOf('CONFIGURAÇÃO DE RIS/PACS FIDI'));
+  assert.ok(saida.opcoes.includes('SUBSTITUIÇÃO DE TONNER/CILINDRO'));
+  assert.ok(saida.opcoes.includes('RESET DE SENHA NEOVERO'));
+  assert.ok(saida.opcoes.includes('VERIFICAÇÃO DE EQUIPAMENTO'));
+  assert.equal(saida.opcoes.length, SERVICOS.length);
+  assert.equal(NV.config.servicosEmCache().length, SERVICOS.length);
+
+  const deNovo = await NV.fluxo.opcoesDeServico(null);
+  assert.equal(deNovo.parcial, false, 'a segunda leitura já usa o cache completo');
+});
+
 test('lista completa não é alterada pela rede de segurança', async () => {
   configurarPadrao();
   montarApp({ opcoesServico: SERVICOS });

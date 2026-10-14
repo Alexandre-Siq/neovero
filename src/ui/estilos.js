@@ -36,6 +36,8 @@
   }
   textarea { min-height: 56px; resize: vertical; }
   select:focus, input:focus, textarea:focus { outline: 2px solid #10b981; outline-offset: -1px; }
+  select[size] { height: 12em; overflow: auto; padding: 0; }
+  select[size] option { padding: 5px 8px; }
 
   button.acao {
     border: 0; border-radius: 9px; padding: 10px 12px; font-size: 13px; font-weight: 700;

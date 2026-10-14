@@ -96,6 +96,39 @@ test('desmarcar o firme e limpar o duvidoso tira os dois do lote', async () => {
   assert.equal(NV.config.obter().classificacao.regras.length, 0, 'não grava regra sem correção');
 });
 
+test('o combo da revisão passa de CONFIGURAÇÃO DE RIS/PACS e a busca filtra', async () => {
+  const sombra = preparar();
+  const corte = NV.classificar.SERVICOS_CONHECIDOS.indexOf('CONFIGURAÇÃO DE RIS/PACS FIDI');
+  const fatia = NV.classificar.SERVICOS_CONHECIDOS.slice(0, corte + 1);
+  const promessa = NV.painel.revisarClassificacaoDoLote(itens(), fatia);
+  const sobre = sombra.querySelector('.sobreposicao');
+  const sel = sobre.querySelector('select');
+  const textos = Array.prototype.map.call(sel.options, function (o) {
+    return o.value;
+  });
+
+  assert.equal(sel.size, 8);
+  assert.ok(textos.indexOf('SUBSTITUIÇÃO DE TONNER/CILINDRO') > textos.indexOf('CONFIGURAÇÃO DE RIS/PACS FIDI'));
+  assert.ok(textos.includes('RESET DE SENHA NEOVERO'));
+  assert.ok(textos.includes('VERIFICAÇÃO DE EQUIPAMENTO'));
+  assert.match(sobre.textContent, /role ou busque/);
+
+  const filtro = sobre.querySelector('[data-filtro]');
+  filtro.value = 'tonner';
+  filtro.dispatchEvent(new Event('input', { bubbles: true }));
+  const visiveis = Array.prototype.filter
+    .call(sel.options, function (o) {
+      return o.value && !o.hidden;
+    })
+    .map(function (o) {
+      return o.value;
+    });
+  assert.deepEqual(visiveis, ['SUBSTITUIÇÃO DE TONNER/CILINDRO']);
+
+  sobre.querySelector('[data-cancelar]').click();
+  assert.equal(await promessa, null);
+});
+
 test('cancelar a revisão não grava nada', async () => {
   const sombra = preparar();
   const promessa = NV.painel.revisarClassificacaoDoLote(itens(), OPCOES);
