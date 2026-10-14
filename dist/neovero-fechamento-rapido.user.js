@@ -3707,8 +3707,10 @@
 /* ===== src/core/fila.js ===== */
 /*
  * Fila de atendimento: fechar chamados a partir da lista do Monitor, sem abrir
- * cada OS à mão. A ordem é a da própria lista; o que já foi processado nesta
- * sessão é ignorado, porque a lista do Neovero pode levar um tempo para atualizar.
+ * cada OS à mão. A ordem é a da própria lista. O que já foi fechado nesta sessão
+ * sai da fila, porque a lista do Neovero pode levar um tempo para atualizar.
+ * Uma falha também sai da passada, para a sequência seguir; "Tentar de novo"
+ * devolve só essas OS, com o serviço já escolhido na revisão.
  */
 (function (NV) {
   'use strict';
@@ -3725,6 +3727,16 @@
   fila.limparMemoria = function () {
     fila.processados.clear();
     fila.ignorados.clear();
+    cache = { em: 0, itens: [] };
+  };
+
+  /* Devolve OS à fila para a tentativa seguinte, sem reclassificar. */
+  fila.reativar = function (numeros) {
+    (numeros || []).forEach(function (numero) {
+      const chave = String(numero);
+      fila.ignorados.delete(chave);
+      fila.processados.delete(chave);
+    });
     cache = { em: 0, itens: [] };
   };
 
@@ -3761,18 +3773,26 @@
   fila.fecharUm = async function (numero, options) {
     const opts = options || {};
     const cfg = NV.config.obter();
+    const presetBase = opts.preset || NV.config.presetAtivo();
+    const revisado = opts.servicosPorOs && opts.servicosPorOs[numero];
+    const preset = revisado
+      ? Object.assign({}, presetBase, { servico: revisado, servicoAutomatico: false })
+      : presetBase;
     let resultado;
     try {
       await NV.lote.abrirOs(numero, cfg.tempos);
       await async.sleep(300);
-      resultado = await NV.fluxo.fecharOS(opts);
+      resultado = await NV.fluxo.fecharOS(Object.assign({}, opts, { preset: preset }));
     } catch (erro) {
       resultado = { ok: false, erro: String(erro.message || erro) };
     }
     resultado.numeroOs = resultado.numeroOs || numero;
+    resultado.servicoUsado = (preset && preset.servico) || resultado.servicoUsado || null;
 
-    if (resultado.ok && resultado.fechada) fila.processados.add(numero);
-    else if (!resultado.cancelado) fila.ignorados.add(numero);
+    if (resultado.ok && resultado.fechada) {
+      fila.ignorados.delete(numero);
+      fila.processados.add(numero);
+    } else if (!resultado.cancelado) fila.ignorados.add(numero);
     cache = { em: 0, itens: [] };
 
     NV.log.info('Fila: OS ' + numero + (resultado.ok ? ' fechada' : ' não fechada'), {
@@ -3793,38 +3813,61 @@
   };
 
   /*
-   * Sequência contínua: fecha um após o outro até a lista esvaziar, o limite ser
-   * atingido, dar erro (quando configurado para parar) ou o usuário cancelar.
-   * options: { aoProgresso, sinal, limite, ...opções do fluxo }
+   * Sequência contínua. Segue depois de uma falha; "Parar no 1º erro" deixa o
+   * restante em `pendentes`. O serviço revisado entra fixo, sem classificar de novo.
+   * options: { numeros, servicosPorOs, aoProgresso, sinal, limite, fase, ...fluxo }
    */
   fila.fecharEmSequencia = async function (options) {
     const opts = options || {};
     const cfg = NV.config.obter();
     const sinal = opts.sinal || NV.fluxo.criarSinal();
     const limite = Math.max(1, opts.limite || cfg.lote.maximo);
+    const pedidos = opts.numeros || fila.pendentes({ cache: false }).map(function (item) {
+      return item.numero;
+    });
+    const numeros = pedidos.slice(0, limite);
     const resultados = [];
+    let pendentes = [];
+    let interrompido = false;
+    let motivo = null;
 
-    for (let i = 0; i < limite; i += 1) {
-      if (sinal.cancelado) break;
-      const item = fila.proximo();
-      if (!item) break;
+    for (let i = 0; i < numeros.length; i += 1) {
+      if (sinal.cancelado) {
+        interrompido = true;
+        motivo = 'cancelado';
+        pendentes = numeros.slice(i);
+        break;
+      }
+      const numero = numeros[i];
       if (opts.aoProgresso) {
         opts.aoProgresso({
           tipo: 'os',
-          numero: item.numero,
-          indice: resultados.length + 1,
-          total: Math.min(limite, resultados.length + 1 + fila.contar({ cache: false })),
-          fase: 'fila'
+          numero: numero,
+          indice: i + 1,
+          total: numeros.length,
+          fase: opts.fase || 'fila'
         });
       }
-      const resultado = await fila.fecharUm(item.numero, Object.assign({}, opts, { sinal: sinal }));
+      const resultado = await fila.fecharUm(numero, Object.assign({}, opts, { sinal: sinal }));
       resultados.push(resultado);
-      if (resultado.cancelado) break;
-      if (!resultado.ok && cfg.lote.pararNoPrimeiroErro) break;
-      if (fila.proximo()) await async.sleep(cfg.lote.esperaEntreOs);
+
+      if (resultado.cancelado || sinal.cancelado) {
+        interrompido = true;
+        motivo = 'cancelado';
+        pendentes = numeros.slice(i + 1);
+        break;
+      }
+      if (!resultado.ok && cfg.lote.pararNoPrimeiroErro) {
+        interrompido = true;
+        motivo = 'erro';
+        pendentes = numeros.slice(i + 1);
+        break;
+      }
+      if (i < numeros.length - 1) await async.sleep(cfg.lote.esperaEntreOs);
     }
 
     return {
+      total: numeros.length,
       processadas: resultados.length,
       sucesso: resultados.filter(function (r) {
         return r.ok && r.fechada;
@@ -3832,6 +3875,9 @@
       falhas: resultados.filter(function (r) {
         return !r.ok;
       }),
+      pendentes: pendentes,
+      interrompido: interrompido,
+      motivo: motivo,
       restantes: fila.contar({ cache: false }),
       resultados: resultados
     };
@@ -4867,17 +4913,41 @@
     definirOcupado(true);
     status('… abrindo a OS ' + numero, 'trabalhando');
     try {
-      const resultado = await NV.fila.fecharUm(numero, {
-        preset: NV.config.presetAtivo(),
-        aoProgresso: aoProgresso,
-        sinal: sinalAtual,
-        aoConfirmar: confirmarFechamento,
-        aoEscolherServico: escolherServico
-      });
-      if (resultado.ok && resultado.fechada) status('✓ OS ' + numero + ' fechada', 'ok');
-      else if (resultado.cancelado) status('Cancelado');
-      else status('✗ OS ' + numero + ': ' + resumoDeErro(resultado), 'erro');
-      return resultado;
+      let atual = numero;
+      while (atual) {
+        const resultado = await NV.fila.fecharUm(atual, {
+          preset: NV.config.presetAtivo(),
+          aoProgresso: aoProgresso,
+          sinal: sinalAtual,
+          aoConfirmar: confirmarFechamento,
+          aoEscolherServico: escolherServico
+        });
+        if (resultado.ok && resultado.fechada) {
+          status('✓ OS ' + atual + ' fechada', 'ok');
+          return resultado;
+        }
+        if (resultado.cancelado) {
+          status('Cancelado');
+          return resultado;
+        }
+        if (resultado.ok) {
+          status('Ocorrência lançada na OS ' + atual + '; a OS continua aberta');
+          return resultado;
+        }
+        status('✗ OS ' + atual + ': ' + resumoDeErro(resultado), 'erro');
+        const decisao = await decidirDepoisDoLote({
+          total: 1,
+          sucesso: 0,
+          falhas: [resultado],
+          pendentes: [],
+          interrompido: false
+        }, '', 'Fila');
+        if (!decisao || decisao.acao !== 'retry' || !decisao.numeros.length) return resultado;
+        NV.fila.reativar(decisao.numeros);
+        atual = decisao.numeros[0];
+        sinalAtual = NV.fluxo.criarSinal();
+      }
+      return null;
     } finally {
       definirOcupado(false);
       sinalAtual = null;
@@ -4894,24 +4964,38 @@
     return fecharDaLista(item.numero);
   }
 
-  async function fecharFilaEmSequencia(confirmarCada) {
+  async function fecharFilaEmSequencia(opcoes) {
+    const opts = opcoes || {};
+    const confirmarCada = !!opts.confirmarCada;
+    let numeros = opts.numeros && opts.numeros.length ? opts.numeros.slice() : null;
+    const servicosPorOs = opts.servicosPorOs || null;
+    let fase = 'fila';
+    let nota = opts.regrasCriadas ? opts.regrasCriadas + ' regra(s) gravada(s) para o próximo fechamento.' : '';
     sinalAtual = NV.fluxo.criarSinal();
     definirOcupado(true);
     try {
-      const resumo = await NV.fila.fecharEmSequencia({
-        preset: NV.config.presetAtivo(),
-        aoProgresso: aoProgresso,
-        sinal: sinalAtual,
-        aoConfirmar: confirmarCada ? confirmarFechamento : null,
-        aoEscolherServico: escolherServico
-      });
-      status(
-        '✓ ' + resumo.sucesso + ' fechada(s)' +
-          (resumo.falhas.length ? ' · ' + resumo.falhas.length + ' falha(s), veja o Log' : '') +
-          (resumo.restantes ? ' · ' + resumo.restantes + ' na fila' : ' · fila vazia'),
-        resumo.falhas.length ? 'erro' : 'ok'
-      );
-      return resumo;
+      while (true) {
+        const resumo = await NV.fila.fecharEmSequencia({
+          numeros: numeros || undefined,
+          preset: NV.config.presetAtivo(),
+          aoProgresso: aoProgresso,
+          sinal: sinalAtual,
+          servicosPorOs: servicosPorOs,
+          aoConfirmar: confirmarCada ? confirmarFechamento : null,
+          aoEscolherServico: escolherServico,
+          fase: fase
+        });
+        const limpo = !resumo.falhas.length && !(resumo.pendentes || []).length;
+        if (nota && limpo) status(textoDoResumo(resumo, nota), 'ok');
+        else status(textoDoResumo(resumo), limpo ? 'ok' : 'erro');
+        const decisao = await decidirDepoisDoLote(resumo, nota, 'Fila');
+        nota = '';
+        if (!decisao || !decisao.numeros || !decisao.numeros.length) break;
+        if (decisao.acao === 'retry') NV.fila.reativar(decisao.numeros);
+        numeros = decisao.numeros;
+        fase = decisao.acao === 'retry' ? 'novamente' : 'continuando';
+        sinalAtual = NV.fluxo.criarSinal();
+      }
     } finally {
       definirOcupado(false);
       sinalAtual = null;
@@ -4924,14 +5008,22 @@
     const pendentes = NV.fila.pendentes({ cache: false });
     const preset = NV.config.presetAtivo() || {};
 
+    const automatico = !!preset.servicoAutomatico;
     const html =
       '<div class="aviso-inline">Ordem da própria lista do Monitor. Fechar uma OS aqui dispensa ' +
-      'abri-la antes. O que falhar sai da fila para não travar a sequência.</div>' +
+      'abri-la antes. A sequência segue depois de uma falha. No fim você tenta só o que falhou, ' +
+      'ou continua o que nem foi aberto.</div>' +
       '<fieldset><legend>Sequência</legend>' +
       '<p class="aviso-inline">Preset: <b>' + esc(preset.nome || '—') + '</b> · pendentes: <b>' + pendentes.length + '</b></p>' +
       '<label class="check"><input type="checkbox" data-confirmar-cada ' +
       (cfg.confirmarAntesDeFechar ? 'checked' : '') +
       '><span>Confirmar cada OS antes de fechar<small>Desmarcado, fecha em sequência sem parar.</small></span></label>' +
+      '<label class="check"><input type="checkbox" data-parar ' + (cfg.lote.pararNoPrimeiroErro ? 'checked' : '') +
+      '><span>Parar no primeiro erro<small>Desmarcado, segue. No fim você tenta só o que falhou.</small></span></label>' +
+      (automatico
+        ? '<label class="check"><input type="checkbox" data-revisar checked>' +
+          '<span>Revisar a classificação antes da sequência<small>Os duvidosos aparecem para ajuste. A lista traz o catálogo inteiro. Corrigir o serviço grava uma regra.</small></span></label>'
+        : '') +
       '<div class="linha">' +
       '<button class="acao" data-proximo>Fechar o próximo</button>' +
       '<button class="acao secundaria" data-sequencia>Fechar em sequência</button>' +
@@ -4980,17 +5072,63 @@
         await fecharProximoDaFila();
       } else if (alvo.dataset && alvo.dataset.sequencia !== undefined) {
         const cada = confirmarCada();
+        const parar = sobre.querySelector('[data-parar]');
+        const revisarEl = sobre.querySelector('[data-revisar]');
+        const revisar = !!(automatico && revisarEl && revisarEl.checked);
+        NV.config.aplicar({ lote: { pararNoPrimeiroErro: !!(parar && parar.checked) } });
+        const numeros = pendentes.map(function (item) {
+          return item.numero;
+        }).slice(0, cfg.lote.maximo);
         sobre.remove();
-        if (!cada) {
+        if (!numeros.length) {
+          status('Nenhuma OS pendente na lista', 'erro');
+          return;
+        }
+        if (!cada && !revisar) {
           const ok = await confirmar(
             'Fechar em sequência',
-            'Serão fechadas até <b>' + Math.min(cfg.lote.maximo, pendentes.length) + '</b> OS sem parar para confirmar. ' +
-              'Continuar?',
+            'Serão fechadas até <b>' + numeros.length + '</b> OS sem parar para confirmar. ' +
+              'Uma falha não interrompe as seguintes. Continuar?',
             'Executar'
           );
           if (!ok) return;
         }
-        await fecharFilaEmSequencia(cada);
+        if (revisar) {
+          sinalAtual = NV.fluxo.criarSinal();
+          definirOcupado(true);
+          let levantamento;
+          try {
+            status('… lendo a descrição de ' + numeros.length + ' chamados', 'trabalhando');
+            levantamento = await NV.lote.classificar({
+              numeros: numeros,
+              aoProgresso: aoProgresso,
+              sinal: sinalAtual
+            });
+          } catch (erro) {
+            status('✗ ' + String(erro.message || erro), 'erro');
+            return;
+          } finally {
+            definirOcupado(false);
+            sinalAtual = null;
+          }
+          if (!levantamento.itens.length) {
+            status('Nada para revisar', 'erro');
+            return;
+          }
+          const revisado = await revisarClassificacaoDoLote(levantamento.itens, levantamento.opcoes);
+          if (!revisado || !revisado.numeros.length) {
+            status('Fila cancelada');
+            return;
+          }
+          await fecharFilaEmSequencia({
+            confirmarCada: cada,
+            numeros: revisado.numeros,
+            servicosPorOs: revisado.servicosPorOs,
+            regrasCriadas: revisado.regrasCriadas
+          });
+          return;
+        }
+        await fecharFilaEmSequencia({ confirmarCada: cada, numeros: numeros });
       }
     });
 
@@ -5171,6 +5309,7 @@
       '✓ ' + resumo.sucesso + '/' + resumo.total + ' fechadas' +
       (resumo.falhas.length ? ' · ' + resumo.falhas.length + ' falha(s)' : '') +
       (pendentes ? ' · ' + pendentes + ' sem tentar' : '') +
+      (resumo.restantes ? ' · ' + resumo.restantes + ' na fila' : '') +
       (nota ? ' · ' + nota : '')
     );
   }
@@ -5196,8 +5335,8 @@
     }
   }
 
-  /* Depois do lote: tentar só as falhas, ou continuar as que nem foram abertas. */
-  function decidirDepoisDoLote(resumo, nota) {
+  /* Depois do lote ou da fila: tentar só as falhas, ou continuar as que nem foram abertas. */
+  function decidirDepoisDoLote(resumo, nota, rotulo) {
     const falhas = (resumo.falhas || []).filter(function (r) {
       return !r.cancelado;
     });
@@ -5224,7 +5363,9 @@
         '<p class="aviso-inline"><b>' + resumo.sucesso + '</b> de <b>' + resumo.total +
         '</b> fechadas.' +
         (resumo.motivo === 'cancelado' ? ' Você cancelou no meio.' : '') +
-        (resumo.motivo === 'erro' ? ' O lote parou no primeiro erro.' : '') +
+        (resumo.motivo === 'erro'
+          ? (rotulo === 'Fila' ? ' A fila parou no primeiro erro.' : ' O lote parou no primeiro erro.')
+          : '') +
         (nota ? ' ' + esc(nota) : '') +
         '</p>' +
         (falhas.length
@@ -5244,7 +5385,10 @@
         '<button class="acao secundaria" data-cancelar>Fechar</button>' +
         (pendentes.length ? '<button class="acao secundaria" data-continuar>Continuar as ' + pendentes.length + ' restantes</button>' : '') +
         (falhas.length ? '<button class="acao" data-retry>Tentar de novo (' + falhas.length + ')</button>' : '');
-      const sobre = abrirSobreposicao(resumo.interrompido ? 'Lote interrompido' : 'Lote encerrado', html, botoes);
+      const titulo = rotulo === 'Fila'
+        ? (resumo.interrompido ? 'Fila interrompida' : 'Fila encerrada')
+        : (resumo.interrompido ? 'Lote interrompido' : 'Lote encerrado');
+      const sobre = abrirSobreposicao(titulo, html, botoes);
       const fechar = function (valor) {
         sobre.remove();
         resolve(valor);

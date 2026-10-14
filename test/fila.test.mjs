@@ -7,6 +7,10 @@ import assert from 'node:assert/strict';
 import { carregarModulos, montarApp, modalAberto } from './ajuda/ambiente.mjs';
 
 const NV = await carregarModulos();
+await import('../src/ui/estilos.js');
+await import('../src/ui/aprender.js');
+await import('../src/ui/lista.js');
+await import('../src/ui/painel.js');
 
 function configurarPadrao(extra) {
   NV.config.restaurarPadrao();
@@ -125,9 +129,56 @@ test('sequência para no primeiro erro quando configurado', async () => {
 
   assert.equal(resumo.processadas, 1);
   assert.equal(resumo.falhas.length, 1);
+  assert.equal(resumo.interrompido, true);
+  assert.equal(resumo.motivo, 'erro');
+  assert.deepEqual(resumo.pendentes, ['202602691']);
+  assert.equal(NV.fila.proximo().numero, '202602691');
 
   const modal = modalAberto();
   if (modal) modal.remove();
+});
+
+test('a sequência segue depois da falha e reusa o serviço revisado', async () => {
+  configurarPadrao({
+    presetAtivo: 'ti-automatico',
+    lote: { esperaEntreOs: 10, maximo: 25, pararNoPrimeiroErro: false },
+    cacheServicos: { valores: NV.classificar.SERVICOS_CONHECIDOS, atualizadoEm: new Date().toISOString() }
+  });
+  const app = montarApp({
+    listaOs: ['202602693', '202602691'],
+    numero: '202602693',
+    descricao: 'impressora sem tonner'
+  });
+  const original = NV.fluxo.fecharOS;
+  NV.fluxo.fecharOS = async function (options) {
+    if (app.estado.numero === '202602693') {
+      return { ok: false, erro: 'o combo recusou o serviço', numeroOs: '202602693', servicoUsado: options.preset.servico };
+    }
+    return original.call(NV.fluxo, options);
+  };
+
+  try {
+    const resumo = await NV.fila.fecharEmSequencia({
+      servicosPorOs: {
+        202602693: 'VERIFICAÇÃO DE EQUIPAMENTO',
+        202602691: 'LIGAR EQUIPAMENTO'
+      }
+    });
+
+    assert.equal(resumo.processadas, 2);
+    assert.equal(resumo.sucesso, 1);
+    assert.equal(resumo.interrompido, false);
+    assert.deepEqual(resumo.pendentes, []);
+    assert.equal(resumo.falhas[0].numeroOs, '202602693');
+    assert.equal(resumo.falhas[0].servicoUsado, 'VERIFICAÇÃO DE EQUIPAMENTO');
+    assert.equal(app.estado.ocorrencias[0].servico, 'LIGAR EQUIPAMENTO');
+    assert.equal(NV.fila.contar({ cache: false }), 0);
+
+    NV.fila.reativar(['202602693']);
+    assert.equal(NV.fila.proximo().numero, '202602693');
+  } finally {
+    NV.fluxo.fecharOS = original;
+  }
 });
 
 test('cancelar interrompe a sequência', async () => {
@@ -140,6 +191,44 @@ test('cancelar interrompe a sequência', async () => {
 
   assert.equal(resumo.processadas, 0);
   assert.equal(app.estado.ocorrencias.length, 0);
+});
+
+test('a janela da fila revisa a classificação e o resumo fala em fila', async () => {
+  configurarPadrao({
+    presetAtivo: 'ti-automatico',
+    lote: { esperaEntreOs: 10, maximo: 25, pararNoPrimeiroErro: false }
+  });
+  montarApp({ listaOs: ['202602693', '202602691'] });
+  NV.painel.montar();
+  const sombra = document.querySelector('[data-nv-ui="painel"]').shadowRoot;
+  sombra.querySelectorAll('.sobreposicao').forEach(function (el) {
+    el.remove();
+  });
+  sombra.querySelector('[data-fila]').click();
+
+  const sobre = sombra.querySelector('.sobreposicao');
+  assert.match(sobre.textContent, /tenta só o que falhou/);
+  assert.equal(sobre.querySelector('[data-parar]').checked, false);
+  assert.equal(sobre.querySelector('[data-revisar]').checked, true);
+  assert.equal(sobre.querySelector('[data-confirmar-cada]').checked, true);
+  assert.ok(sobre.querySelector('[data-proximo]'));
+  assert.ok(sobre.querySelector('[data-sequencia]'));
+  sobre.remove();
+
+  const promessa = NV.painel.decidirDepoisDoLote({
+    total: 2,
+    sucesso: 0,
+    falhas: [{ ok: false, numeroOs: '202602693', erro: 'o combo recusou o serviço' }],
+    pendentes: ['202602691'],
+    interrompido: true,
+    motivo: 'erro'
+  }, '', 'Fila');
+  const resumo = sombra.querySelector('.sobreposicao');
+  assert.match(resumo.querySelector('header').textContent, /Fila interrompida/);
+  assert.match(resumo.textContent, /A fila parou no primeiro erro/);
+  assert.match(resumo.textContent, /202602691/);
+  resumo.querySelector('[data-cancelar]').click();
+  assert.equal(await promessa, null);
 });
 
 test('limparMemoria devolve as OS processadas à fila', async () => {
