@@ -1,0 +1,16 @@
+{
+  "name": "neovero-fechamento-rapido",
+  "version": "0.1.0",
+  "description": "Automatiza o fechamento de chamados (Ordens de Serviço) no Neovero: lança a ocorrência e fecha a OS em um clique.",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "node --test \"test/**/*.test.mjs\"",
+    "check": "npm run test && npm run build"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "jsdom": "^29.1.1"
+  }
+}
